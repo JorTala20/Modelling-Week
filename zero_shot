@@ -1,0 +1,69 @@
+from transformers import pipeline
+from multiprocessing import Pool, cpu_count
+
+# Define your possible classes
+class ZeroShotClassifier:
+    def __init__(self, possible_classes=None):
+        if possible_classes is None:
+            self.possible_classes = [
+                "trial",
+                "guidelines",
+                "paper"
+            ]
+        else:
+            self.possible_classes = possible_classes
+
+    def _init_classifier(self):
+        global classifier
+        classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+
+    def _classify_single_document(self, doc):
+        return classifier(doc, self.possible_classes)
+
+    def classify_documents(self, documents):
+        """
+        Classify a list of documents into one of the candidate labels using zero-shot learning, in parallel.
+
+        Args:
+            documents (list of str): The documents to classify.
+
+        Returns:
+            list of dict: Each dict contains 'sequence', 'labels', and 'scores'.
+        """
+        with Pool(processes=min(cpu_count(), len(documents)), initializer=self._init_classifier) as pool:
+            results = pool.map(self._classify_single_document, documents)
+        return results
+    
+    def get_documents_by_class(self, results):
+        """
+        Given classification results, return a list of documents for each class.
+
+        Args:
+            results (list of dict): The classification results.
+
+        Returns:
+            dict: Keys are class names, values are lists of document texts assigned to that class.
+        """
+        docs_by_class = {cls: [] for cls in self.possible_classes}
+        for result in results:
+            # Assign document to the top predicted class
+            top_class = result['labels'][0]
+            docs_by_class[top_class].append(result['sequence'])
+        return docs_by_class
+
+
+
+"""
+# Esempio di utilizzo con classificazione parallela:
+if __name__ == "__main__":
+    docs = [
+        "This study enrolled 200 patients to test the efficacy of a new drug.",
+        "The following recommendations are for the management of hypertension.",
+        "We present a review of recent advances in cancer immunotherapy."
+    ]
+    # Classificazione parallela dei documenti
+    classified = classify_documents(docs)
+    for res in classified:
+        print(f"Testo: {res['sequence']}\nClasse predetta: {res['labels'][0]} (score: {res['scores'][0]:.2f})\n")
+"""
+"""This example demonstrates how to classify a list of documents into predefined categories using zero-shot classification."""
