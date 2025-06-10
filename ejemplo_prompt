@@ -1,0 +1,19 @@
+Resumen del paciente:
+- Varón, 35 años.
+- Diagnóstico: Enfermedad de Gaucher tipo 1 [C0011847], hepatomegalia [C0021248], anemia crónica [C0002871].
+- Historia: tratamiento sintomático actual, sin terapias específicas previas.
+
+Ensayos clínicos relevantes:
+1. ct_Gaucher_001:
+   - Título: Ensayo fase II de enzima recombinante en Gaucher tipo 1 con hepatomegalia moderada.
+   - Criterios: adultos 18-50, Gaucher confirmado, hepatomegalia > X, sin insuficiencia grave.
+   - Objetivos: reducción de volumen de órgano, mejora hematológica. Estado: reclutamiento abierto.
+2. ct_hematol_005:
+   - Título: Ensayos en lisosomales: terapia adyuvante para anemia crónica (subgrupo Gaucher).
+   - Estado: fase I completada.
+3. ct_Gaucher_010:
+   - Título: Ensayo fase I/II tratamiento enzimático experimental.
+   - ...
+
+Solicitud al modelo:
+\"Genera un plan de tratamiento personalizado para este paciente con Enfermedad de Gaucher tipo 1, justificando cada recomendación con referencias a los ensayos indicados. Evalúa beneficios potenciales y riesgos, considera la hepatomegalia y anemia, sugiere monitoreo y seguimiento. Indica si el paciente es elegible según criterios y qué exámenes adicionales requeriría antes de inclusión en el ensayo.\"
