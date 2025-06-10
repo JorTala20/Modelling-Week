@@ -55,7 +55,7 @@ if __name__ == "__main__":
     MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"            # free and active model
 
     prompt = """
-You are a medical assistant. Based on the patient's history, generate a brief summary.
+You are a medical assistant. Based on the patient's history, generate a therapeutic report.
 
 Patient: 45-year-old male, diagnosed with type 1 diabetes and hypertension.
 Current medication: insulin and metformin.
