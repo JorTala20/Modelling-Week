@@ -1,0 +1,161 @@
+import pandas as pd
+from pathlib import Path
+
+def cargar_tablas_synthea(directorio: str) -> dict:
+    ruta = Path(directorio)
+    tablas = {}
+    for archivo in ruta.glob("*.csv"):
+        nombre = archivo.stem  # por ejemplo: patients
+        tablas[nombre] = pd.read_csv(archivo)
+    return tablas
+
+
+def resumen_paciente(t: dict, patient_id: str) -> dict:
+    fila = t["patients"].query("Id == @patient_id").iloc[0]
+    demografia = {
+        "id": patient_id,
+        "sexo": fila["GENDER"],
+        "nacimiento": fila["BIRTHDATE"],
+        "raza": fila["RACE"]
+    }
+
+    dx = t["conditions"].query("PATIENT == @patient_id")[["DESCRIPTION", "START"]]
+    medicamentos = t["medications"].query("PATIENT == @patient_id and STOP.isna()")["DESCRIPTION"]
+
+    return {
+        "demografia": demografia,
+        "diagnosticos": dx.to_dict(orient="records"),
+        "medicacion_activa": medicamentos.tolist()
+    }
+
+if __name__ == "__main__":
+    tablas = cargar_tablas_synthea("synthea/csv")
+    paciente_aleatorio = tablas["patients"]["Id"].sample(1).item()
+    resumen = resumen_paciente(tablas, paciente_aleatorio)
+
+    print("=== Resumen clínico ===")
+    print("Demografía:", resumen["demografia"])
+    print("\nDiagnósticos:")
+    for d in resumen["diagnosticos"]:
+        print(f" - {d['START']}: {d['DESCRIPTION']}")
+    print("\nFármacos activos:", ", ".join(resumen["medicacion_activa"]) or "ninguno")
+
+
+import requests
+
+def buscar_trials_v2(palabra_clave: str, max_resultados: int = 5) -> list:
+    url = "https://clinicaltrials.gov/api/v2/studies"
+
+    params = {
+        "query.term": palabra_clave,     # término de búsqueda libre
+        "pageSize": max_resultados       # número de resultados
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        print("❌ Error al consultar la nueva API:", e)
+        return []
+
+    data = response.json()
+    estudios = data.get("studies", [])
+
+    resultados = []
+    for est in estudios:
+        resultados.append({
+            "nct_id": est.get("protocolSection", {}).get("identificationModule", {}).get("nctId", "Sin ID"),
+            "titulo": est.get("protocolSection", {}).get("identificationModule", {}).get("briefTitle", "Sin título"),
+            "condicion": est.get("protocolSection", {}).get("conditionsModule", {}).get("conditions", []),
+            "estado": est.get("protocolSection", {}).get("statusModule", {}).get("overallStatus", "Desconocido"),
+        })
+
+    return resultados
+
+
+print("-"*100)
+
+if __name__ == "__main__":
+    enfermedad = "duchenne"
+    resultados = buscar_trials_v2(enfermedad, max_resultados=5)
+
+    if resultados:
+        print(f"\nEnsayos encontrados para: {enfermedad.upper()}")
+        for ensayo in resultados:
+            print(f"- {ensayo['nct_id']} [{ensayo['estado']}]: {ensayo['titulo'][:90]}...")
+    else:
+        print("No se encontraron ensayos o hubo un error.")
+
+
+import spacy
+from scispacy.linking import UmlsEntityLinker
+
+nlp = spacy.load("en_core_sci_sm")
+linker = UmlsEntityLinker(resolve_abbreviations=True)
+nlp.add_pipe("scispacy_linker", config={"linker": linker})
+
+doc = nlp("Duchenne muscular dystrophy")
+
+for ent in doc.ents:
+    print("Entidad:", ent.text)
+    print("CUI:", ent._.umls_ents[0][0])  # el primer CUI
+    print("Score:", ent._.umls_ents[0][1])
+
+
+
+def sinonimos_de_cui(texto: str) -> list:
+    doc = nlp(texto)
+    if not doc.ents:
+        return []
+
+    cui = doc.ents[0]._.umls_ents[0][0]
+    nombres = []
+    for kb_entry in linker.kb.cui_to_entity[cui].aliases:
+        nombres.append(kb_entry)
+    return list(set(nombres))  # quitar duplicados
+
+def buscar_trials_por_cui(texto_diagnostico: str, max_resultados: int = 5) -> list:
+    sinos = sinonimos_de_cui(texto_diagnostico)
+    if not sinos:
+        return []
+
+    # Combinar los sinónimos en una query OR
+    query = " OR ".join(f'"{s}"' for s in sinos)
+
+    url = "https://clinicaltrials.gov/api/v2/studies"
+    params = {
+        "query.term": query,
+        "pageSize": max_resultados
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        print("❌ Error al consultar API:", e)
+        return []
+
+    datos = r.json().get("studies", [])
+    resultados = []
+
+    for est in datos:
+        mod = est.get("protocolSection", {})
+        resultados.append({
+            "nct_id": mod.get("identificationModule", {}).get("nctId", "Sin ID"),
+            "titulo": mod.get("identificationModule", {}).get("briefTitle", "Sin título"),
+            "estado": mod.get("statusModule", {}).get("overallStatus", "Desconocido")
+        })
+
+    return resultados
+
+
+if __name__ == "__main__":
+    enfermedad = "Duchenne muscular dystrophy"
+    ensayos = buscar_trials_por_cui(enfermedad)
+
+    print(f"\nEnsayos para: {enfermedad}")
+    for ensayo in ensayos:
+        print(f"- {ensayo['nct_id']} [{ensayo['estado']}]: {ensayo['titulo'][:90]}...")
+
+
+
