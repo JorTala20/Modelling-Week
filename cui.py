@@ -79,9 +79,9 @@ def buscar_trials_por_sinonimos(sinonimos: list, limite: int = 5):
         print(f"- {nct} [{estado}]: {title[:90]}...")
     print()
 
-def main():
+def main(nlp, linker):
     print(">>> Entrando en main()")  # debug
-    nlp, linker = crear_pipeline_umls()
+    #nlp, linker = crear_pipeline_umls()
     print(">>> Pipeline cargado")    # debug
 
     texto = "lung cancer and type 1 diabetes."
@@ -101,7 +101,3 @@ def main():
         print(f"   • Sinónimos : {', '.join(muestra)}…")
         buscar_trials_por_sinonimos(info["sinonimos"], limite=5)
     print(">>> Fin de main()")  # debug
-
-
-if __name__ == "__main__":
-    main()
