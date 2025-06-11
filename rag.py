@@ -1,6 +1,6 @@
 from utils import *
 
-def generate_text(prompt: str, model_id: str, hf_token: str, max_new_tokens: int = 200) -> str:
+def generate_text(prompt: str, model_id: str, hf_token: str, max_new_tokens: int = 2000) -> str:
     """
     Send a prompt to the Hugging Face model via the Inference API and return the generated text.
 
