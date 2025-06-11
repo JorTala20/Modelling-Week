@@ -1,15 +1,15 @@
 def generate_prompt(docs_by_class=None, patient_info=None):
     """
-    Generates a detailed prompt for the RAG, including sources, patient information,
-    and clinical history, specifying the class of each input section.
+    Create a detailed prompt for a Retrieval-Augmented Generation (RAG) system, including sources,
+    patient information, and clinical history, with each input section labeled by its class.
 
-    :param documents: list of strings (papers, guidelines, or trials)
-    :param docs_by_class: optional dict with keys 'guidelines', 'papers', 'trials' and list[str] values
-    :param patient_info: optional dictionary with relevant patient information
-    :return: prompt string
+    :param docs_by_class: Optional dictionary with keys 'guidelines', 'papers', 'trials', each mapping to a list of strings.
+    :param patient_info: Optional dictionary containing patient demographic and clinical data.
+    :return: A formatted prompt string.
     """
 
     def _format_dict(info_dict):
+        # Format a dictionary as key-value pairs, one per line.
         return "\n".join([f"{k}: {v}" for k, v in info_dict.items()])
 
     intro = (
@@ -20,7 +20,7 @@ def generate_prompt(docs_by_class=None, patient_info=None):
         "Cite relevant sources in your response.\n"
     )
 
-    # Prepare sources by class if provided
+    # Format sources by class if provided as a dictionary
     if docs_by_class:
         guidelines = "\n".join([f"- {doc.strip()}" for doc in docs_by_class.get('guidelines', []) if doc.strip()])
         papers = "\n".join([f"- {doc.strip()}" for doc in docs_by_class.get('papers', []) if doc.strip()])
@@ -31,10 +31,11 @@ def generate_prompt(docs_by_class=None, patient_info=None):
             f"Clinical Trials (class: list[str]):\n{trials}"
         )
     else:
-        sources = "\n".join([f"- {doc.strip()}" for doc in documents if doc.strip()])
+        # If docs_by_class is not a dictionary, treat it as a flat list of sources
+        sources = "\n".join([f"- {doc.strip()}" for doc in docs_by_class if doc.strip()])
         sources_section = f"Sources (class: list[str]):\n{sources}"
 
-    # Patient information
+    # Format patient information if provided
     patient_section = ""
     if patient_info:
         formatted_patient = _format_dict(patient_info)
@@ -51,6 +52,7 @@ def generate_prompt(docs_by_class=None, patient_info=None):
         "Cite relevant sources (guidelines, papers, trials) in your recommendations."
     )
 
+    # Combine all sections into the final prompt
     prompt = (
         f"{intro}\n"
         f"{sources_section}"
@@ -61,7 +63,8 @@ def generate_prompt(docs_by_class=None, patient_info=None):
     )
     return prompt
 
-# Example usage:
+
+# Example usage
 if __name__ == "__main__":
     docs_by_class = {
         "guidelines": [
