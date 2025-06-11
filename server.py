@@ -1,6 +1,7 @@
 from utils import *
 
 
+
 app = FastAPI()
 
 @app.get("/health")
@@ -31,7 +32,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int = Query(default=
             documents = hybrid_search(cui_prompt)
             classified_docs = get_documents_by_class(documents)
             prompt = generate_prompt(classified_docs, user_prompt)
-            respuesta=generate_text(prompt)
+            respuesta=generate_text(prompt, MODEL_ID, HF_TOKEN)
 
             await websocket.send(respuesta)
 
