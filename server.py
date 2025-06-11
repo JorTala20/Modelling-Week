@@ -1,15 +1,7 @@
 from utils import *
 
-from orquestador import orquestador
-from capa_de_componentes import capa_de_componentes
-from conversador_final import conversador_final
-
-DB_PATH = r".\db"
 
 app = FastAPI()
-
-# Diccionario para sesiones activas
-user_sessions = {}
 
 @app.get("/health")
 async def health_check():
@@ -29,14 +21,18 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int = Query(default=
     try:
         while True:
             data = await websocket.receive_json()
-            user_prompt = data.get("prompt")
+            user_prompt = data.get("prompt") #aqui query inicial
 
             if not user_prompt:
                 continue
             
             conversacion.append({"role":"user", "content": user_prompt})
-            # Aqui tirar la función que calcula la respuesta 
-            conversacion.append({"role": "assistant", "content": respuesta})
+            cui_prompt = cui(user_prompt)
+            documents = hybrid_search(cui_prompt)
+            classified_docs = get_documents_by_class(documents)
+            prompt = generate_prompt(classified_docs, user_prompt)
+            respuesta=generate_text(prompt)
+
             await websocket.send(respuesta)
 
     except WebSocketDisconnect:
