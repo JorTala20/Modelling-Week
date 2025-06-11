@@ -4,6 +4,7 @@ def get_documents_by_class(documents, possible_classes=None):
     """
     Classify a list of documents into one of the candidate labels using zero-shot learning.
     Returns a dict: Keys are class names, values are lists of document texts assigned to that class.
+    The model used is facebook/bart-large-mnli by META.
     """
     if possible_classes is None:
         possible_classes = ["trial", "guidelines", "paper"]
@@ -17,8 +18,9 @@ def get_documents_by_class(documents, possible_classes=None):
         docs_by_class[top_class].append(result['sequence'])
     return docs_by_class
 
+# Example usage: classify a list of sample documents into predefined categories using zero-shot classification.
 if __name__ == "__main__":
-    # 100 sample documents (repeating 10 base examples for demonstration)
+    # 10 example documents (repeating the base list for demonstration)
     base_documents = [
         "This clinical trial investigates the effects of a new drug.",
         "The latest guidelines for COVID-19 prevention have been published.",
@@ -31,11 +33,9 @@ if __name__ == "__main__":
         "This paper reviews the literature on deep learning.",
         "Guidelines for diabetes care have changed recently."
     ]
-    # Repeat the base_documents to reach 10 samples
-    sample_documents = base_documents * 1  # 10 x 10 = 100
+    sample_documents = base_documents
 
     classes = ["trial", "guidelines", "paper"]
-    # classifier = None  # Non serve più, ma lasciato per chiarezza
     result = get_documents_by_class(sample_documents, classes)
     for cls, docs in result.items():
         print(f"\nClass: {cls}")
