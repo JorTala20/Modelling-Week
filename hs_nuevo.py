@@ -53,7 +53,7 @@ MODEL_NAME    = "sentence-transformers/all-MiniLM-L6-v2"
 # =============================================================================
 #  UMLS PIPELINE
 # =============================================================================
-def load_umls_pipeline() -> Tuple[spacy.language.Language, "scispacy_linker"]:
+def load_umls_pipeline():
     """Create spaCy pipeline + scispaCy UMLS linker."""
     print("Loading spaCy + UMLS linker …")
     nlp = spacy.load("en_core_sci_sm")
@@ -175,6 +175,32 @@ def ingest_pubmed_csv(csv_path: str) -> Tuple[List[str], List[str]]:
     ids   = [f"pm_{i}" for i in range(len(texts))]
     print(f"✔️  PubMed-RCT fragments: {len(texts)}")
     return texts, ids
+
+def pre_ingest(synthea_path: str = "synthea/csv", pubmed_path: str = "pubmed_rct/train.csv"):
+    """
+    Loads and combines the Synthea and PubMed-RCT datasets.
+
+    Args:
+        synthea_path (str): Path to the Synthea CSV directory.
+        pubmed_path (str): Path to the PubMed-RCT CSV file.
+
+    Returns:
+        Tuple[List[str], List[str]]: Combined list of texts and their corresponding IDs.
+    """
+    texts, ids = [], []
+
+    # Ingest from Synthea
+    synthea_texts, synthea_ids = ingest_synthea_csv(synthea_path)
+    texts += synthea_texts
+    ids += synthea_ids
+
+    # Ingest from PubMed-RCT
+    pubmed_texts, pubmed_ids = ingest_pubmed_csv(pubmed_path)
+    texts += pubmed_texts
+    ids += pubmed_ids
+
+    return texts, ids
+
 
 # =============================================================================
 #  ClinicalTrials.gov (hierarchical search)
@@ -306,9 +332,10 @@ def build_vector_index(texts: List[str], ids: List[str]) -> SentenceTransformer:
 # =============================================================================
 #  BM25 helpers
 # =============================================================================
-def cui_docs(texts: List[str], nlp) -> List[str]:
+def compute_cui_docs(texts: List[str], nlp) -> List[str]:
     """Return each document as space-separated CUIs."""
     return [prompt_to_cuis(t.lower(), nlp) for t in texts]
+
 
 
 def bm25_scores(
@@ -400,59 +427,56 @@ def cli(nlp, linker):
 
     p_s = sub.add_parser("search")
     p_s.add_argument("prompt")
-    p_s.add_argument("--trial_limit", type=int, default=100)
+    p_s.add_argument("--trial_limit", type=int, default=2)
     p_s.add_argument("--k", type=int, default=20)
 
     args = parser.parse_args()
 
-    # ─── INGEST ALL ────────────────────────────────────────────────────────
-    if args.cmd == "ingest":
-        base_txt, base_ids = ingest_synthea_csv(args.synthea)
-        p_txt, p_ids       = ingest_pubmed_csv(args.pubmed)
-        all_txt, all_ids   = base_txt + p_txt, base_ids + p_ids
-        pd.DataFrame({"id": all_ids, "text": all_txt}).to_csv(CORPUS_CSV, index=False)
-        np.save(DOC_CUIS_NPY, np.array(cui_docs(all_txt, nlp)))
-        build_vector_index(all_txt, all_ids)
-        print("🏁 Corpus ingested and indexed.")
-
     # ─── SEARCH FLOW ───────────────────────────────────────────────────────
-    elif args.cmd == "search":
-        if not Path(CORPUS_CSV).exists():
-            print("No local corpus – run `ingest` first."); sys.exit(1)
+    if not Path(CORPUS_CSV).exists():
+        print("🔄 No corpus.csv. Executing default ingest (synthea/csv + pubmed_rct/train.csv)...")
+        default_synthea = "synthea/csv"
+        default_pubmed = "pubmed_rct/train.csv"
+        texts, ids = pre_ingest(default_synthea, default_pubmed)
+        cui_docs = compute_cui_docs(texts, nlp)
+        np.save(DOC_CUIS_NPY, np.array(cui_docs))
+        np.save(DOC_IDS_NPY, np.array(ids))
+        pd.DataFrame({"id": ids, "text": texts}).to_csv(CORPUS_CSV, index=False)
+        build_vector_index(texts, ids)
+        
+    # Load local corpus
+    print("🔄 Corpus encontrado")
+    df        = pd.read_csv(CORPUS_CSV).fillna("")
+    base_txt  = df["text"].astype(str).tolist()
+    base_ids  = df["id"].tolist()
+    base_cuis = np.load(DOC_CUIS_NPY)
 
-        # Load local corpus
-        df        = pd.read_csv(CORPUS_CSV).fillna("")
-        base_txt  = df["text"].astype(str).tolist()
-        base_ids  = df["id"].tolist()
-        base_cuis = np.load(DOC_CUIS_NPY)
+    # Ingest on-the-fly ClinicalTrials for this query
+    ct_txt, ct_ids = ingest_trials(nlp, linker, args.prompt, args.trial_limit)
+    ct_cuis        = compute_cui_docs(ct_txt, nlp)
 
-        # Ingest on-the-fly ClinicalTrials for this query
-        ct_txt, ct_ids = ingest_trials(nlp, linker, args.prompt, args.trial_limit)
-        ct_cuis        = cui_docs(ct_txt, nlp)
+    # Combine & rebuild vector index (quick)
+    build_vector_index(ct_txt + base_txt, ct_ids + base_ids)
+    model = SentenceTransformer(MODEL_NAME)
 
-        # Combine & rebuild vector index (quick)
-        build_vector_index(ct_txt + base_txt, ct_ids + base_ids)
-        model = SentenceTransformer(MODEL_NAME)
+    # BM25 + dense + RRF
+    bm = bm25_scores(ct_cuis + list(base_cuis), args.prompt, nlp)
+    dense = dense_scores(args.prompt, model)
+    fused = rrf(bm, dense, ct_ids + base_ids, k=args.k)
 
-        # BM25 + dense + RRF
-        bm = bm25_scores(ct_cuis + list(base_cuis), args.prompt, nlp)
-        dense = dense_scores(args.prompt, model)
-        fused = rrf(bm, dense, ct_ids + base_ids, k=args.k)
-
-        # Pretty print
-        lookup = {**dict(zip(base_ids, base_txt)), **dict(zip(ct_ids, ct_txt))}
-        print("\nTop results")
-        for did, score in fused:
-            snippet = lookup[did][:120].replace("\n", " ")
-            print(f"{did:20}  RRF={score:.3f}  -> {snippet}…")
+    # Pretty print
+    lookup = {**dict(zip(base_ids, base_txt)), **dict(zip(ct_ids, ct_txt))}
+    print("\nTop results")
+    for did, score in fused:
+        snippet = lookup[did][:120].replace("\n", " ")
+        print(f"{did:20}  RRF={score:.3f}  -> {snippet}…")
 
 
 # =============================================================================
 #  ENTRY-POINT
 # =============================================================================
-if __name__ == "__main__":
-    nlp, linker = load_umls_pipeline()
-    if len(sys.argv) == 1:  # quick demo
-        sys.argv.extend(["search",
-                         "35-year-old male with lung cancer and ibuprofen 3 times per week"])
-    cli(nlp, linker)
+#nlp, linker = load_umls_pipeline()
+if len(sys.argv) == 1:  # quick demo
+    sys.argv.extend(["search",
+                     "35-year-old male with lung cancer and ibuprofen 3 times per week"])
+cli(nlp, linker)
