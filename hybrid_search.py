@@ -94,8 +94,8 @@ def normalizar_prompt_a_cui(texto_paciente: str, nlp) -> str:
     Returns:
         Un string donde las entidades médicas han sido sustituidas por sus CUIs.
     """
-    print(f"\n--- Normalizando a CUI ---")
-    print(f"Texto original: '{texto_paciente}'")
+    #print(f"\n--- Normalizando a CUI ---")
+    #print(f"Texto original: '{texto_paciente}'")
     
     doc = nlp(texto_paciente)
     texto_modificado = texto_paciente
@@ -117,10 +117,10 @@ def normalizar_prompt_a_cui(texto_paciente: str, nlp) -> str:
             texto_modificado = texto_modificado[:inicio] + cui + texto_modificado[fin:]
             entidades_encontradas += 1
 
-    if entidades_encontradas == 0:
-        print("⚠️ No se encontraron entidades médicas para reemplazar.")
-    else:
-        print(f"✅ Se reemplazaron {entidades_encontradas} entidad(es).")
+    #if entidades_encontradas == 0:
+        #print("⚠️ No se encontraron entidades médicas para reemplazar.")
+    #else:
+        #print(f"✅ Se reemplazaron {entidades_encontradas} entidad(es).")
 
     return texto_modificado
 
@@ -219,32 +219,103 @@ def ingest_pubmed_csv(csv_path: str):
 
 
 # ──────────────────── Ingesta ClinicalTrials.gov ───────────────────────────
-def ingest_clinical_trials(term: str, limit: int = 100):
-    url = f"https://clinicaltrials.gov/api/v2/studies?query.term={quote(term)}&pageSize={limit}"
-    data = requests.get(url, timeout=30).json()
-    estudios = data.get("studies", [])
-    textos, ids = [], []
-    for i, e in enumerate(estudios):
-        ps = e.get("protocolSection", {})
-        title   = ps.get("identificationModule", {}).get("briefTitle", "")
-        summary = ps.get("descriptionModule", {}).get("briefSummary", "")
-        full = f"{title}. {summary}".strip()
-        if full:
-            textos.append(full)
-            ids.append(f"ct_{i}")
-    print(f"✔️  ClinicalTrials fragmentos: {len(textos)}")
-    return textos, ids
+import requests
+from urllib.parse import quote
+from itertools import combinations
+from typing import List, Tuple
+from itertools import combinations, product
+from urllib.parse import quote
+import requests
+from typing import List, Tuple
+
+def synonim_cui(cui: str, linker) -> List[str]:
+    """
+    Devuelve una lista de sinónimos (incluyendo el nombre canónico)
+    para un CUI usando linker.kb.
+    """
+    entity = linker.kb.cui_to_entity.get(cui)
+    if not entity:
+        return [cui]  # fallback si no se encuentra el CUI
+
+    # Combina nombre canónico + alias únicos
+    sinonimos = set(entity.aliases)
+    sinonimos.add(entity.canonical_name)
+    return list(sinonimos)
+
+
+def ingest_clinical_trials(nlp, linker, cuis: List[str], limit: int = 500) -> List[Tuple[str, List[str]]]:
+    """
+    Búsqueda progresiva en ClinicalTrials.gov usando sinónimos de CUIs.
+    Devuelve una lista de tuplas (query usada, lista de títulos encontrados).
+    """
+
+    def consulta(query: str) -> List[str]:
+        url = f"https://clinicaltrials.gov/api/v2/studies?query.term={quote(query)}&pageSize={limit}"
+        try:
+            resp = requests.get(url, timeout=30).json()
+            estudios = resp.get("studies", [])
+            resultados = []
+            for e in estudios:
+                ps = e.get("protocolSection", {})
+                title = ps.get("identificationModule", {}).get("briefTitle", "")
+                if title:
+                    resultados.append(title.strip())
+            return resultados
+        except Exception as e:
+            print(f"❌ Error en query '{query}': {e}")
+            return []
+
+    resultados_finales = []
+
+    # Paso 1: construir lista de sinónimos por CUI
+    cui_terms = []
+    for cui in cuis:
+        sinonimos = synonim_cui(cui, linker)
+        terms = sinonimos[:10]
+        if isinstance(terms, str):  # si devuelve string en lugar de lista
+            terms = [terms]
+        cui_terms.append([t.strip() for t in terms if t.strip()])
+
+    # Nivel 4: individuales
+
+    for term_list in cui_terms:
+        term_mark = 0
+        for term in term_list:
+            if term_mark < limit:
+                res = consulta(term)
+                for r in res[:limit]:
+                    term_mark += 1
+                    resultados_finales.append((term, r))
+
+    print(f"✔️  ClinicalTrials.gov fragmentos: {len(resultados_finales)}")
+    return resultados_finales
+
 
 # ──────────────────── Ingesta unificada ────────────────────────────────────
-def ingest_all(synthea_path: str,
+def ingest_all(nlp, linker, synthea_path: str,
                pubmed_path: str,
                trial_term: str,
-               trial_limit: int = 500):
+               trial_limit: int = 10):
     textos, ids = [], []
+
     textos += (ts := ingest_synthea_csv(synthea_path))[0];   ids += ts[1]
     textos += (tp := ingest_pubmed_csv(pubmed_path))[0];     ids += tp[1]
-    textos += (tc := ingest_clinical_trials(trial_term, trial_limit))[0]; ids += tc[1]
+
+    cuis = extraer_cui(trial_term, nlp, linker)
+    resultados_trials = ingest_clinical_trials(nlp, linker, cuis, trial_limit)
+
+    trial_textos = []
+    trial_ids = []
+    for i, (query, titles) in enumerate(resultados_trials):
+        for j, title in enumerate(titles):
+            trial_textos.append(title)
+            trial_ids.append(f"ct_{i}_{j}")
+
+    textos += trial_textos
+    ids += trial_ids
+
     return textos, ids
+
 
 # ──────────────────── Vectorización / Índice ───────────────────────────────
 def build_vector_index(textos: List[str], ids: List[str]):
@@ -269,12 +340,18 @@ def build_vector_index(textos: List[str], ids: List[str]):
 
 # ──────────────────── BM25 local ───────────────────────────────────────────
 def bm25_scores(textos: List[str], query: str, nlp):
-    print(textos)
-    cleaned = [str(t).lower().split() for t in textos]          # ← cast a str
-    print(cleaned)
-    bm25 = BM25Okapi(normalizar_prompt_a_cui(cleaned, nlp))
-    return bm25.get_scores(query.lower().split())
+    cleaned = [str(t).lower() for t in textos]
 
+    # Aplica normalización a CUI para cada documento
+    cui_docs = [normalizar_prompt_a_cui(texto, nlp) for texto in cleaned]
+
+    # Construye índice BM25 sobre tokens = CUIs
+    bm25 = BM25Okapi(cui_docs)
+
+    # Normaliza la query también
+    query_cuis = normalizar_prompt_a_cui(query.lower(), nlp)
+
+    return bm25.get_scores(query_cuis)
 
 # ──────────────────── Vector search local ──────────────────────────────────
 def vec_scores(query: str, model: SentenceTransformer, top_n=200):
@@ -300,7 +377,7 @@ def rrf_fuse(bm25, vec, doc_ids, k=20, rrf_k=5):
     return sorted(scr.items(), key=lambda x: x[1], reverse=True)[:k]
 
 # ──────────────────── CLI ──────────────────────────────────────────────────
-def cli(nlp):
+def cli(nlp, linker):
     argp = argparse.ArgumentParser()
     sub  = argp.add_subparsers(dest="cmd", required=True)
 
@@ -317,14 +394,14 @@ def cli(nlp):
     args = argp.parse_args()
 
     if args.cmd == "ingest":
-        txt, ids = ingest_all(args.synthea, args.pubmed, args.trial, args.trial_limit)
+        txt, ids = ingest_all(nlp, linker, args.synthea, args.pubmed, args.trial, args.trial_limit)
         build_vector_index(txt, ids)
         print("🚀 Ingesta y vectorización completas.")
 
     elif args.cmd == "search":
         if not Path(CORPUS_CSV).exists():
             print("🔄 No corpus.csv. Ejecutando ingesta rápida...")
-            txt, ids = ingest_all("synthea/csv", "pubmed_rct/train.csv", "35-year-old male with lung cancer and ibuprofen 3 times per week", 200)
+            txt, ids = ingest_all(nlp, linker, "synthea/csv", "pubmed_rct/train.csv", "35-year-old male with lung cancer and ibuprofen 3 times per week", 200)
             build_vector_index(txt, ids)
         df = pd.read_csv(CORPUS_CSV).fillna("")        # ← elimina NaN
         text = df["text"].astype(str).tolist()        # ← forzamos str
@@ -340,6 +417,7 @@ def cli(nlp):
             snippet = df[df.id==did].text.values[0][:120].replace("\n", " ")
             print(f"{did:15}  score={sc:.3f}  → {snippet}...")
 
+        
 # ──────────────────── Auto-ejecución ───────────────────────────────────────
 if __name__ != "__main__":
     if len(sys.argv) == 1:
