@@ -24,16 +24,16 @@ def init_session(user_id):
 
 
 @app.websocket("/api/v1/chat")
-async def websocket_endpoint(websocket, user_id):
+async def websocket_endpoint(websocket):
     await websocket.accept()
 
+    user_id = (await websocket.recv()).strip()
     session = init_session(user_id)
     conversation = session["conversation"]
 
     try:
         while True:
-            data = await websocket.receive_json()
-            user_prompt = data.get("prompt")
+            user_prompt = (await websocket.recv()).strip()
             if not user_prompt:
                 continue
 
@@ -47,11 +47,11 @@ async def websocket_endpoint(websocket, user_id):
 
             conversation.append({"role": "assistant", "content": response})
             session["conversation"] = conversation
-            await websocket.send_json({"user_id": user_id, "response": response})
+            await websocket.send(response)
 
     except WebSocketDisconnect:
         user_sessions.pop(user_id, None)
-        logging.info(f"Disconnected client {user_id} and terminated session.")
+        logging.info(f"Client {user_id} disconnected and session terminated.")
 
     except Exception as e:
         logging.error(f"WebSocket error (user {user_id}): {e}")
