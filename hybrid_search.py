@@ -437,7 +437,7 @@ def cli(nlp, linker):
 
     if not Path(CORPUS_CSV).exists():
         print("🔄 No corpus.csv. Ejecutando ingesta rápida...")
-        txt, ids = pre_ingest("synthea/csv", "pubmed_rct/train.csv")
+        txt, ids = pre_ingest("synthea_data", "pubMed_data/train.csv")
         print("ingestado")
         cui_docs = get_cui_docs(txt, nlp)
         print("cuidado")
@@ -458,7 +458,7 @@ def cli(nlp, linker):
                   10000)
     ct_cuis = get_cui_docs(ct_txt, nlp)
     build_vector_index(ct_txt + txt, ct_ids + ids)
-     
+
     model = SentenceTransformer(MODEL_NAME)
     print("modelado")
     bm = bm25_scores(list(ct_cuis) + list(cui_docs), args.prompt, nlp)
@@ -468,7 +468,7 @@ def cli(nlp, linker):
     res   = rrf_fuse(bm, vec, ct_ids + ids, k=args.k)
     print("rrfuseado")
     text_lookup = {**dict(zip(ids, txt)), **dict(zip(ct_ids, ct_txt))}
-    
+
     print("\n📄 Top resultados:")
     snippets = []
     for did, sc in res:
