@@ -1,0 +1,4 @@
+fastapi
+uvicorn[standard]
+websockets     # cliente y servidor WS
+streamlit      # frontend
