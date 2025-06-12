@@ -2,25 +2,26 @@
 from utils import *
 from server import app
 
-async def test_client(event: asyncio.Event):
-    """Cliente de prueba para conectarse al servidor WebSocket."""
-    uri = "ws://localhost:8000/api/v1/chat?user_id=1"
+async def test_client(event: asyncio.Event, user_id: int = 1) -> None:
+    uri = f"ws://localhost:8000/api/v1/chat?user_id={user_id}"
 
     async with websockets.connect(uri) as websocket:
-        while True:
-            user_input = input("Mensaje (o 'salir' para terminar): ")
-            if user_input.lower() == "salir":
-                break
+        await websocket.send(user_id)
+        try:
+            while True:
+                user_input = input("Query(write 'finish' to end): ")
+                if user_input.lower() == "salir":
+                    break
 
-            # Enviar mensaje al servidor
-            await websocket.send(user_input)
+                await websocket.send(user_input)
+                
+                response = (await websocket.recv()).strip()
 
-            # Recibir respuesta del servidor
-            response_data = await websocket.recv()
+                print(f"The assistant's treatment report is: \n{response}")
 
-            print(f"Respuesta del servidor: {response_data}")
-    
-    # Notificar que el cliente ha terminado
+        finally:
+            await websocket.close()
+
     event.set()
 
 async def main():
