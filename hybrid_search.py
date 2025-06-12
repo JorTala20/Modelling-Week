@@ -459,7 +459,7 @@ def cli(nlp, linker):
     
     ct_txt, ct_ids = ingest_trials(nlp, linker,
                   "35-year-old male with lung cancer and ibuprofen 3 times per week",
-                  10000)
+                  1000)
     print(f"✔️  ClinicalTrials.gov fragments: {len(ct_txt)}")
     ct_cuis = compute_cui_docs(ct_txt, nlp)
     build_vector_index(ct_txt + txt, ct_ids + ids)
