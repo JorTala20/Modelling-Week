@@ -36,3 +36,6 @@ async def main():
     # Detener Uvicorn manualmente usando señales del sistema
     os.kill(os.getpid(), signal.SIGTERM)
     print("Servidor detenido. ¡Hasta la próxima!")
+
+if __name__ == "__main__":
+    asyncio.run(main())
