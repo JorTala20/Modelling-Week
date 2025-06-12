@@ -66,7 +66,7 @@ def crear_pipeline_umls():
     print("¡Modelo cargado con éxito!")
     return nlp, linker
 
-def extraer_cui(texto: str, nlp, linker) -> dict:
+def extraer_cui(texto: str, nlp) -> dict:
     """Extrae entidades médicas, sus CUIs y sinónimos de un texto."""
     doc = nlp(texto)
     resultados = []
@@ -75,10 +75,6 @@ def extraer_cui(texto: str, nlp, linker) -> dict:
         if not kb_ents:
             continue
         cui = kb_ents[0][0]
-        entity = linker.kb.cui_to_entity.get(cui)
-        if not entity:
-            continue
-        # Usamos un set para sinónimos únicos y lo convertimos a lista
         resultados.append(cui)
     return resultados
 
@@ -95,8 +91,6 @@ def normalizar_prompt_a_cui(texto_paciente: str, nlp) -> str:
     Returns:
         Un string donde las entidades médicas han sido sustituidas por sus CUIs.
     """
-    #print(f"\n--- Normalizando a CUI ---")
-    print(f"Texto original: '{texto_paciente}'")
     
     doc = nlp(texto_paciente)
     texto_modificado = texto_paciente
@@ -117,11 +111,6 @@ def normalizar_prompt_a_cui(texto_paciente: str, nlp) -> str:
             fin = ent.end_char
             texto_modificado = texto_modificado[:inicio] + cui + texto_modificado[fin:]
             entidades_encontradas += 1
-
-    if entidades_encontradas == 0:
-        print("⚠️ No se encontraron entidades médicas para reemplazar.")
-    else:
-        print(f"✅ Se reemplazaron {entidades_encontradas} entidad(es).")
 
     return texto_modificado
 
@@ -196,7 +185,7 @@ def ingest_synthea_csv(dir_csv: str):
     return textos, ids
 
 
-# ──────────────────── Ingesta PubMed-RCT TSV ──────────────────────────────
+# ──────────────────── Ingesta PubMed-RCT CSV ──────────────────────────────
 def ingest_pubmed_csv(csv_path: str):
     df = pd.read_csv(csv_path, dtype=str)
 
@@ -228,6 +217,7 @@ from itertools import combinations, product
 from urllib.parse import quote
 import requests
 from typing import List, Tuple
+from itertools import chain
 
 def synonim_cui(cui: str, linker) -> List[str]:
     """
@@ -249,30 +239,40 @@ def ingest_clinical_trials(nlp, linker, terms: List[str], limit: int = 200):
     terms = lista de descripciones en lenguaje natural, ej. ['lung cancer','ibuprofen']
     Implementa búsqueda jerárquica: primero term[0]; luego filtra con term[1:], etc.
     """
-    def consulta(q):
-        url = f"https://clinicaltrials.gov/api/v2/studies?query.term={quote(q)}&pageSize={limit}"
-        try:
-            js = requests.get(url, timeout=30).json()
-            return [
-                e.get("protocolSection", {})
-                 .get("identificationModule", {})
-                 .get("briefTitle", "").strip()
-                for e in js.get("studies", [])
-            ]
-        except Exception:
-            return []
+    def consulta(cui, linker):
+        qs = synonim_cui(cui, linker)
+        numero = int(len(qs)/4)+1
+        result = []
+        for q in qs[:numero]:
+            print(q)
+            url = f"https://clinicaltrials.gov/api/v2/studies?query.term={quote(q)}&pageSize={limit}"
+            try:
+                js = requests.get(url, timeout=30).json()
+                result += [
+                    e.get("protocolSection", {})
+                     .get("identificationModule", {})
+                     .get("briefTitle", "").strip()
+                    for e in js.get("studies", [])
+                ]
+            except Exception:
+                return result
+        return result
 
     if not terms:
         return []
 
     # 1) Primera capa: term principal
-    primarios = consulta(terms[0])
+    primarios = consulta(terms[0], linker)
 
     # 2) Filtra por los términos restantes
     filtrados = []
-    resto = [t.lower() for t in terms[1:]]
+
+    resto = list(
+        map(lambda x: x.lower(),
+            chain.from_iterable(synonim_cui(t, linker)[:2] for t in terms[1:]))
+    )
     for t in primarios:
-        if all(r in t.lower() for r in resto):
+        if any(r in t for r in resto):
             filtrados.append(t)
 
     finales = filtrados if filtrados else primarios
@@ -281,14 +281,33 @@ def ingest_clinical_trials(nlp, linker, terms: List[str], limit: int = 200):
 
 
 # ──────────────────── Ingesta unificada ────────────────────────────────────
+TUI_PRIORIDAD = {
+    "T047": 1,  # Disease or Syndrome
+    "T191": 1,  # Neoplastic Process
+    "T121": 2,  # Pharmacologic Substance
+    "T200": 2,  # Clinical Drug
+    "T061": 3,  # Therapeutic/Preventive Procedure
+    "T060": 3,  # Diagnostic Procedure
+    "T123": 4,  # Biologically Active Substance
+    "T109": 5,  # Organic Chemical
+    "T103": 6,  # Chemical
+    "T074": 7,  # Medical Device
+    "T170": 8,  # Intellectual Product
+    "T078": 9   # Idea or Concept
+}
+
+def prioridad_cui(cui: str, linker) -> int:
+    entity = linker.kb.cui_to_entity.get(cui)
+    if not entity or not entity.types:
+        return 999  # máximo si no tiene TUI
+    return min(TUI_PRIORIDAD.get(tui, 999) for tui in entity.types)
+
+
 def ingest_trials(nlp, linker, trial_term: str, trial_limit: int = 10):
 
     # extrae CUIs ➜ descripciones
-    cuis = extraer_cui(trial_term, nlp, linker)
-    terms = sorted(
-    [synonim_cui(c, linker)[0] for c in cuis],        # mismo código
-    key=lambda t: ('cancer' not in t.lower(), len(t)) # patología primero
-)
+    cuis = extraer_cui(trial_term, nlp)
+    terms = sorted(cuis, key=lambda c: prioridad_cui(c, linker))
 
     res_trials = ingest_clinical_trials(nlp, linker, terms, trial_limit)
 
@@ -331,7 +350,6 @@ def build_vector_index(textos: List[str], ids: List[str]):
 # ──────────────────── BM25 local ───────────────────────────────────────────
 def get_cui_docs(textos, nlp):
     cleaned = [str(t).lower() for t in textos]
-    print(cleaned)
 
     # Aplica normalización a CUI para cada documento
     cui_docs = [normalizar_prompt_a_cui(texto, nlp) for texto in cleaned]
@@ -433,26 +451,16 @@ def cli(nlp, linker):
     df = pd.read_csv(CORPUS_CSV).fillna("")        # ← elimina NaN
     txt = df["text"].astype(str).tolist()        # ← forzamos str
     ids = df["id"].tolist()
-    print(ids)
     cui_docs = np.load(DOC_CUIS_NPY)
-    print(cui_docs)
     
     ct_txt, ct_ids = ingest_trials(nlp, linker,
                   "35-year-old male with lung cancer and ibuprofen 3 times per week",
                   10000)
-    print("ingestado")
-    print(ct_txt)
     ct_cuis = get_cui_docs(ct_txt, nlp)
-    print("cuidado")
-    
     build_vector_index(ct_txt + txt, ct_ids + ids)
-    
-    print("vectorizado")    
+     
     model = SentenceTransformer(MODEL_NAME)
     print("modelado")
-    print(ct_cuis)
-    print("---------------------------------------------------")
-    print(cui_docs)
     bm = bm25_scores(list(ct_cuis) + list(cui_docs), args.prompt, nlp)
     print("BMeado")
     vec   = vec_scores(args.prompt, model)
@@ -460,6 +468,7 @@ def cli(nlp, linker):
     res   = rrf_fuse(bm, vec, ct_ids + ids, k=args.k)
     print("rrfuseado")
     text_lookup = {**dict(zip(ids, txt)), **dict(zip(ct_ids, ct_txt))}
+    
     print("\n📄 Top resultados:")
     snippets = []
     for did, sc in res:
@@ -470,7 +479,8 @@ def cli(nlp, linker):
     return [r + (s,) for r, s in zip(res, snippets)]
 
 # ──────────────────── Auto-ejecución ───────────────────────────────────────
-if __name__ != "__main__":
+if __name__ == "__main__":
+    nlp, linker = crear_pipeline_umls()
     if len(sys.argv) == 1:
         sys.argv.extend(["search", "35-year-old male with lung cancer and ibuprofen 3 times per week"])
-    cli(nlp)
+    cli(nlp, linker)
