@@ -427,7 +427,7 @@ def cli(nlp, linker):
 
     p_s = sub.add_parser("search")
     p_s.add_argument("prompt")
-    p_s.add_argument("--trial_limit", type=int, default=2)
+    p_s.add_argument("--trial_limit", type=int, default=200)
     p_s.add_argument("--k", type=int, default=20)
 
     args = parser.parse_args()
@@ -453,6 +453,7 @@ def cli(nlp, linker):
 
     # Ingest on-the-fly ClinicalTrials for this query
     ct_txt, ct_ids = ingest_trials(nlp, linker, args.prompt, args.trial_limit)
+    print(f"✔️  ClinicalTrials.gov fragments: {len(ct_txt)}")
     ct_cuis        = compute_cui_docs(ct_txt, nlp)
 
     # Combine & rebuild vector index (quick)
