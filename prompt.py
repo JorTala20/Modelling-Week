@@ -14,7 +14,7 @@ def generate_prompt(docs_by_class=None, patient_info=None):
 
     intro = (
         "You will receive several inputs divided by section, each indicating its class.\n"
-        "- Sources (class: list[str]): relevant papers, guidelines, and clinical trials.\n"
+        "- Sources (class: list[str]): relevant papers, guidelines, and clinical trials between the one you're receiving.\n"
         "- Patient information (class: dict): current demographic and clinical data.\n\n"
         "Use all sections to provide precise and up-to-date recommendations on the most suitable treatment. "
         "Cite relevant sources in your response.\n"
