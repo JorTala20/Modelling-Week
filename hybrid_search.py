@@ -15,6 +15,16 @@ import argparse, csv, json, os, sys
 from pathlib import Path
 from typing import List, Dict
 
+import requests
+from urllib.parse import quote
+from itertools import combinations
+from typing import List, Tuple
+from itertools import combinations, product
+from urllib.parse import quote
+import requests
+from typing import List, Tuple
+from itertools import chain
+
 import numpy as np, pandas as pd
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
@@ -50,72 +60,42 @@ warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 # --- Funciones proporcionadas por el usuario (sin cambios) ---
 
-def crear_pipeline_umls():
-    """Carga el modelo de spacy y añade el linker de UMLS."""
-    print("Cargando modelo de spaCy y linker UMLS...")
+def load_umls_pipeline():
+    """Create spaCy pipeline + scispaCy UMLS linker."""
+    print("Loading spaCy + UMLS linker …")
     nlp = spacy.load("en_core_sci_sm")
     nlp.add_pipe(
         "scispacy_linker",
         last=True,
-        config={
-            "linker_name": "umls",
-            "resolve_abbreviations": True
-        },
+        config={"linker_name": "umls", "resolve_abbreviations": True},
     )
     linker = nlp.get_pipe("scispacy_linker")
-    print("¡Modelo cargado con éxito!")
+    print("Pipeline ready!\n")
     return nlp, linker
 
-def extraer_cui(texto: str, nlp) -> dict:
-    """Extrae entidades médicas, sus CUIs y sinónimos de un texto."""
-    doc = nlp(texto)
-    resultados = []
-    for ent in doc.ents:
-        kb_ents = getattr(ent._, "kb_ents", None)
-        if not kb_ents:
-            continue
-        cui = kb_ents[0][0]
-        resultados.append(cui)
-    return resultados
+def extract_cuis(text: str, nlp, linker) -> List[str]:
+    """Return CUIs found in *text* (first candidate of each entity)."""
+    return [ent._.kb_ents[0][0]
+            for ent in nlp(text).ents
+            if getattr(ent._, "kb_ents", None)]
 
 # --- 1. Función de Normalización del Prompt (Nueva) ---
 
-def normalizar_prompt_a_cui(texto_paciente: str, nlp) -> str:
+def prompt_to_cuis(text: str, nlp) -> str:
     """
-    Toma un texto, detecta entidades médicas y las reemplaza por su CUI.
-
-    Args:
-        texto_paciente: El perfil del paciente en lenguaje natural.
-        nlp: El pipeline de spaCy cargado con el linker UMLS.
-
-    Returns:
-        Un string donde las entidades médicas han sido sustituidas por sus CUIs.
+    Replace each recognised medical entity in *text* with its CUI.
+    Leaving non-medical tokens intact preserves context for BM25.
     """
-    
-    doc = nlp(texto_paciente)
-    texto_modificado = texto_paciente
-    
-    # Obtenemos las entidades y las ordenamos por su posición inicial en orden inverso
-    # Esto es CRÍTICO para que los reemplazos no invaliden los índices de las siguientes entidades
-    entidades_orden_inverso = sorted(doc.ents, key=lambda e: e.start_char, reverse=True)
-    
-    entidades_encontradas = 0
-    for ent in entidades_orden_inverso:
-        # Comprobamos si la entidad tiene candidatos en la base de conocimiento (UMLS)
-        if hasattr(ent._, "kb_ents") and ent._.kb_ents:
-            # Seleccionamos el CUI del primer candidato (el de mayor probabilidad)
+    doc = nlp(text)
+    out = text
+    for ent in sorted(doc.ents, key=lambda e: e.start_char, reverse=True):
+        if ent._.kb_ents:
             cui = ent._.kb_ents[0][0]
-            
-            # Reemplazamos el texto de la entidad por su CUI en la cadena
-            inicio = ent.start_char
-            fin = ent.end_char
-            texto_modificado = texto_modificado[:inicio] + cui + texto_modificado[fin:]
-            entidades_encontradas += 1
-
-    return texto_modificado
+            out = out[:ent.start_char] + cui + out[ent.end_char:]
+    return out
 
 # ──────────────────── Ingesta Synthea CSV ─────────────────────────────────
-def ingest_synthea_csv(dir_csv: str):
+def ingest_synthea_csv(csv_dir: str) -> Tuple[List[str], List[str]]:
     
     def safe(val, slice_len=None):
         if pd.notna(val):
@@ -123,115 +103,124 @@ def ingest_synthea_csv(dir_csv: str):
             return val_str[:slice_len] if slice_len else val_str
         return "unknown"
 
-    patients = pd.read_csv(Path(dir_csv) / "patients.csv", dtype=str)
-    cond = pd.read_csv(Path(dir_csv) / "conditions.csv", dtype=str)
-    allergies = pd.read_csv(Path(dir_csv) / "allergies.csv", dtype=str)
-    care = pd.read_csv(Path(dir_csv) / "careplans.csv", dtype=str)
-    dev = pd.read_csv(Path(dir_csv) / "devices.csv", dtype=str)
-    encounters = pd.read_csv(Path(dir_csv) / "encounters.csv", dtype=str)
-    imaging = pd.read_csv(Path(dir_csv) / "imaging_studies.csv", dtype=str)
-    immun = pd.read_csv(Path(dir_csv) / "immunizations.csv", dtype=str)
-    meds = pd.read_csv(Path(dir_csv) / "medications.csv", dtype=str)
-    obs = pd.read_csv(Path(dir_csv) / "observations.csv", dtype=str)
-    proc = pd.read_csv(Path(dir_csv) / "procedures.csv", dtype=str)
-
-    textos, ids = [], []
-    for _, p in patients.iterrows():
-        pid = p["Id"]
-        textos.append(f"Patient {safe(p['GENDER'])} born {safe(p['BIRTHDATE'], 10)} race {safe(p['RACE'])}")
+    """Flatten multiple Synthea CSVs into plain text fragments."""
+    p = Path(csv_dir)
+    patients   = pd.read_csv(p / "patients.csv", dtype=str)
+    conditions = pd.read_csv(p / "conditions.csv", dtype=str)
+    allergies  = pd.read_csv(p / "allergies.csv", dtype=str)
+    careplans  = pd.read_csv(p / "careplans.csv", dtype=str)
+    devices    = pd.read_csv(p / "devices.csv", dtype=str)
+    encounters = pd.read_csv(p / "encounters.csv", dtype=str)
+    imaging    = pd.read_csv(p / "imaging_studies.csv", dtype=str)
+    immun      = pd.read_csv(p / "immunizations.csv", dtype=str)
+    meds       = pd.read_csv(p / "medications.csv", dtype=str)
+    obs        = pd.read_csv(p / "observations.csv", dtype=str)
+    procs      = pd.read_csv(p / "procedures.csv", dtype=str)
+    
+    texts, ids = [], []
+    for _, pat in patients.iterrows():
+        pid = pat["Id"]
+        texts.append(f"Patient {safe(pat['GENDER'])} born {safe(pat['BIRTHDATE'],10)} "
+                     f"race {safe(pat['RACE'])}")
         ids.append(f"ehr_{pid}_demo")
 
-        for idx, c in cond[cond["PATIENT"] == pid].iterrows():
-            textos.append(f"Condition {safe(c['DESCRIPTION'])} started {safe(c['START'], 10)}")
-            ids.append(f"ehr_{pid}_cond_{idx}")
+        for i, row in conditions[conditions["PATIENT"] == pid].iterrows():
+            texts.append(f"Condition {safe(row['DESCRIPTION'])} started {safe(row['START'],10)}")
+            ids.append(f"ehr_{pid}_cond_{i}")
 
-        for idx, e in encounters[encounters["PATIENT"] == pid].iterrows():
-            textos.append(f"Encounter {safe(e['ENCOUNTERCLASS'])} for {safe(e['DESCRIPTION'])} from {safe(e['START'], 10)} to {safe(e['STOP'], 10)}")
-            ids.append(f"ehr_{pid}_enc_{idx}")
+        for i, row in encounters[encounters["PATIENT"] == pid].iterrows():
+            texts.append(f"Encounter {safe(row['ENCOUNTERCLASS'])} for {safe(row['DESCRIPTION'])} "
+                         f"from {safe(row['START'],10)} to {safe(row['STOP'],10)}")
+            ids.append(f"ehr_{pid}_enc_{i}")
 
-        for idx, a in allergies[allergies["PATIENT"] == pid].iterrows():
-            textos.append(f"Allergy to {safe(a['DESCRIPTION'])} recorded on {safe(a['START'], 10)}")
-            ids.append(f"ehr_{pid}_alg_{idx}")
+        for i, row in allergies[allergies["PATIENT"] == pid].iterrows():
+            texts.append(f"Allergy to {safe(row['DESCRIPTION'])} recorded {safe(row['START'],10)}")
+            ids.append(f"ehr_{pid}_alg_{i}")
 
-        for idx, c in care[care["PATIENT"] == pid].iterrows():
-            textos.append(f"Care plan: {safe(c['DESCRIPTION'])} from {safe(c['START'], 10)} to {safe(c['STOP'], 10)}")
-            ids.append(f"ehr_{pid}_care_{idx}")
+        for i, row in careplans[careplans["PATIENT"] == pid].iterrows():
+            texts.append(f"Care plan {safe(row['DESCRIPTION'])} "
+                         f"{safe(row['START'],10)}–{safe(row['STOP'],10)}")
+            ids.append(f"ehr_{pid}_care_{i}")
 
-        for idx, d in dev[dev["PATIENT"] == pid].iterrows():
-            textos.append(f"Device: {safe(d['DESCRIPTION'])} implanted on {safe(d['START'], 10)}")
-            ids.append(f"ehr_{pid}_dev_{idx}")
+        for i, row in devices[devices["PATIENT"] == pid].iterrows():
+            texts.append(f"Device {safe(row['DESCRIPTION'])} implanted {safe(row['START'],10)}")
+            ids.append(f"ehr_{pid}_dev_{i}")
 
-        for idx, im in imaging[imaging["PATIENT"] == pid].iterrows():
-            textos.append(f"Imaging study: {safe(im['BODYSITE_DESCRIPTION'])} on {safe(im['DATE'], 10)}")
-            ids.append(f"ehr_{pid}_img_{idx}")
+        for i, row in imaging[imaging["PATIENT"] == pid].iterrows():
+            body = safe(row.get("BODYSITE_DESCRIPTION") or row.get("BODYSITE"))
+            texts.append(f"Imaging study {body} on {safe(row['DATE'],10)}")
+            ids.append(f"ehr_{pid}_img_{i}")
 
-        for idx, im in immun[immun["PATIENT"] == pid].iterrows():
-            textos.append(f"Immunization: {safe(im['DESCRIPTION'])} on {safe(im['DATE'], 10)}")
-            ids.append(f"ehr_{pid}_imm_{idx}")
+        for i, row in immun[immun["PATIENT"] == pid].iterrows():
+            texts.append(f"Immunisation {safe(row['DESCRIPTION'])} on {safe(row['DATE'],10)}")
+            ids.append(f"ehr_{pid}_imm_{i}")
 
-        for idx, m in meds[meds["PATIENT"] == pid].iterrows():
-            textos.append(f"Medication: {safe(m['DESCRIPTION'])} from {safe(m['START'], 10)} to {safe(m['STOP'], 10)}")
-            ids.append(f"ehr_{pid}_med_{idx}")
+        for i, row in meds[meds["PATIENT"] == pid].iterrows():
+            texts.append(f"Medication {safe(row['DESCRIPTION'])} from {safe(row['START'],10)} "
+                         f"to {safe(row['STOP'],10)}")
+            ids.append(f"ehr_{pid}_med_{i}")
 
-        for idx, o in obs[obs["PATIENT"] == pid].iterrows():
-            textos.append(f"Observation: {safe(o['DESCRIPTION'])} = {safe(o['VALUE'])} on {safe(o['DATE'], 10)}")
-            ids.append(f"ehr_{pid}_obs_{idx}")
+        for i, row in obs[obs["PATIENT"] == pid].iterrows():
+            texts.append(f"Observation {safe(row['DESCRIPTION'])}={safe(row['VALUE'])} "
+                         f"{safe(row['DATE'],10)}")
+            ids.append(f"ehr_{pid}_obs_{i}")
 
-        for idx, pr in proc[proc["PATIENT"] == pid].iterrows():
-            textos.append(f"Procedure: {safe(pr['DESCRIPTION'])} on {safe(pr['DATE'], 10)}")
-            ids.append(f"ehr_{pid}_proc_{idx}")
+        for i, row in procs[procs["PATIENT"] == pid].iterrows():
+            texts.append(f"Procedure {safe(row['DESCRIPTION'])} on {safe(row['DATE'],10)}")
+            ids.append(f"ehr_{pid}_proc_{i}")
 
-    print(f"✔️  Synthea fragmentos: {len(textos)}")
-    return textos, ids
-
+    print(f"✔️  Synthea fragments: {len(texts)}")
+    return texts, ids
 
 # ──────────────────── Ingesta PubMed-RCT CSV ──────────────────────────────
-def ingest_pubmed_csv(csv_path: str):
+def ingest_pubmed_csv(csv_path: str) -> Tuple[List[str], List[str]]:
+    """PubMed-RCT file → one text fragment per sentence + target label."""
     df = pd.read_csv(csv_path, dtype=str)
-
-    # Verifica que existen las columnas requeridas
-    if "abstract_text" not in df.columns or "target" not in df.columns:
-        raise ValueError("El CSV debe contener las columnas 'abstract_text' y 'target'.")
-
-    # Elimina filas con texto o target vacío
+    if {"abstract_text", "target"} - set(df.columns):
+        raise ValueError("CSV must have columns 'abstract_text' and 'target'")
     df = df[df["abstract_text"].notna() & df["target"].notna()]
-
+    
     # Asegura que todo es texto plano
     df["abstract_text"] = df["abstract_text"].astype(str)
     df["target"] = df["target"].astype(str)
+    
+    texts = [f"{row['target']}: {row['abstract_text']}" for _, row in df.iterrows()]
+    ids   = [f"pm_{i}" for i in range(len(texts))]
+    print(f"✔️  PubMed-RCT fragments: {len(texts)}")
+    return texts, ids
 
-    # Concatena target al texto → formato: "TARGET: texto..."
-    textos = [f"{row['target']}: {row['abstract_text']}" for _, row in df.iterrows()]
-    ids    = [f"pm_{i}" for i in range(len(textos))]
+def pre_ingest(synthea_path: str = "synthea/csv", pubmed_path: str = "pubmed_rct/train.csv"):
+    """
+    Loads and combines the Synthea and PubMed-RCT datasets.
 
-    print(f"✔️  PubMed-RCT fragmentos: {len(textos)}")
-    return textos, ids
+    Args:
+        synthea_path (str): Path to the Synthea CSV directory.
+        pubmed_path (str): Path to the PubMed-RCT CSV file.
 
+    Returns:
+        Tuple[List[str], List[str]]: Combined list of texts and their corresponding IDs.
+    """
+    texts, ids = [], []
+
+    # Ingest from Synthea
+    synthea_texts, synthea_ids = ingest_synthea_csv(synthea_path)
+    texts += synthea_texts
+    ids += synthea_ids
+
+    # Ingest from PubMed-RCT
+    pubmed_texts, pubmed_ids = ingest_pubmed_csv(pubmed_path)
+    texts += pubmed_texts
+    ids += pubmed_ids
+
+    return texts, ids
 
 # ──────────────────── Ingesta ClinicalTrials.gov ───────────────────────────
-import requests
-from urllib.parse import quote
-from itertools import combinations
-from typing import List, Tuple
-from itertools import combinations, product
-from urllib.parse import quote
-import requests
-from typing import List, Tuple
-from itertools import chain
-
-def synonim_cui(cui: str, linker) -> List[str]:
-    """
-    Devuelve una lista de sinónimos (incluyendo el nombre canónico)
-    para un CUI usando linker.kb.
-    """
-    entity = linker.kb.cui_to_entity.get(cui)
-    if not entity:
-        return [cui]  # fallback si no se encuentra el CUI
-
-    # Combina nombre canónico + alias únicos
-    sinonimos = set(entity.aliases)
-    sinonimos.add(entity.canonical_name)
-    return list(sinonimos)
+def cui_synonyms(cui: str, linker) -> List[str]:
+    """Canonical name + aliases (deduplicated)."""
+    ent = linker.kb.cui_to_entity.get(cui)
+    if not ent:
+        return [cui]
+    return list(set(ent.aliases) | {ent.canonical_name})
 
 
 def ingest_clinical_trials(nlp, linker, terms: List[str], limit: int = 200):
@@ -240,7 +229,7 @@ def ingest_clinical_trials(nlp, linker, terms: List[str], limit: int = 200):
     Implementa búsqueda jerárquica: primero term[0]; luego filtra con term[1:], etc.
     """
     def consulta(cui, linker):
-        qs = synonim_cui(cui, linker)
+        qs = sorted(cui_synonyms(cui, linker))
         numero = int(len(qs)/4)+1
         result = []
         for q in qs[:numero]:
@@ -269,7 +258,7 @@ def ingest_clinical_trials(nlp, linker, terms: List[str], limit: int = 200):
 
     resto = list(
         map(lambda x: x.lower(),
-            chain.from_iterable(synonim_cui(t, linker)[:2] for t in terms[1:]))
+            chain.from_iterable(cui_synonyms(t, linker)[:2] for t in terms[1:]))
     )
     for t in primarios:
         if any(r in t for r in resto):
@@ -281,141 +270,156 @@ def ingest_clinical_trials(nlp, linker, terms: List[str], limit: int = 200):
 
 
 # ──────────────────── Ingesta unificada ────────────────────────────────────
-TUI_PRIORIDAD = {
+TUI_PRIORITY: Dict[str, int] = {
     "T047": 1,  # Disease or Syndrome
     "T191": 1,  # Neoplastic Process
     "T121": 2,  # Pharmacologic Substance
     "T200": 2,  # Clinical Drug
-    "T061": 3,  # Therapeutic/Preventive Procedure
+    "T061": 3,  # Therapeutic / Preventive Procedure
     "T060": 3,  # Diagnostic Procedure
     "T123": 4,  # Biologically Active Substance
     "T109": 5,  # Organic Chemical
     "T103": 6,  # Chemical
     "T074": 7,  # Medical Device
     "T170": 8,  # Intellectual Product
-    "T078": 9   # Idea or Concept
+    "T078": 9,  # Idea or Concept
 }
 
-def prioridad_cui(cui: str, linker) -> int:
-    entity = linker.kb.cui_to_entity.get(cui)
-    if not entity or not entity.types:
-        return 999  # máximo si no tiene TUI
-    return min(TUI_PRIORIDAD.get(tui, 999) for tui in entity.types)
+
+def cui_priority(cui: str, linker) -> int:
+    ent = linker.kb.cui_to_entity.get(cui)
+    if not ent or not ent.types:
+        return 999
+    return min(TUI_PRIORITY.get(t, 999) for t in ent.types)
 
 
-def ingest_trials(nlp, linker, trial_term: str, trial_limit: int = 10):
+def ingest_trials(
+    nlp,
+    linker,
+    query_text: str,
+    limit: int = 100,
+) -> Tuple[List[str], List[str]]:
+    cuis = sorted(extract_cuis(query_text, nlp, linker),
+                  key=lambda c: cui_priority(c, linker))
+    trials = ingest_clinical_trials(nlp, linker, cuis, limit)
 
-    # extrae CUIs ➜ descripciones
-    cuis = extraer_cui(trial_term, nlp)
-    terms = sorted(cuis, key=lambda c: prioridad_cui(c, linker))
-
-    res_trials = ingest_clinical_trials(nlp, linker, terms, trial_limit)
-
-
-    trial_textos = []
-    trial_ids = []
-    for i, (query, titles) in enumerate(res_trials):
-        for j, title in enumerate(titles):
-            trial_textos.append(title)
-            trial_ids.append(f"ct_{i}_{j}")
-
-    return trial_textos, trial_ids
-
-def pre_ingest(synthea_path: str, pubmed_path: str):
-    textos, ids = [], []
-
-    textos += (ts := ingest_synthea_csv(synthea_path))[0];   ids += ts[1]
-    textos += (tp := ingest_pubmed_csv(pubmed_path))[0];     ids += tp[1]
-
-    return textos, ids
+    t_texts, t_ids = [], []
+    for block, (label, titles) in enumerate(trials):
+        for i, title in enumerate(titles):
+            t_texts.append(title)
+            t_ids.append(f"ct_{block}_{i}")
+    return t_texts, t_ids
 
 # ──────────────────── Vectorización / Índice ───────────────────────────────
-def build_vector_index(textos: List[str], ids: List[str]):
+def build_vector_index(texts: List[str], ids: List[str]) -> SentenceTransformer:
     model = SentenceTransformer(MODEL_NAME)
-    emb   = model.encode(textos, normalize_embeddings=True)
-    
-    if _HAS_FAISS:
-        idx = faiss.IndexFlatIP(DIM); idx.add(emb.astype(np.float32))
-        faiss.write_index(idx, VEC_FAISS); print("✅ FAISS guardado")
-    elif _HAS_HNSW:
-        p = hnswlib.Index(space="cosine", dim=DIM)
-        p.init_index(max_elements=len(emb), ef_construction=200, M=16)
-        p.add_items(emb, np.arange(len(emb))); p.save_index(VEC_HNSW)
-        print("✅ HNSW guardado")
-    else:
-        raise ImportError("Instala faiss-cpu o hnswlib")
+    vecs  = model.encode(texts, normalize_embeddings=True)
 
+    if _HAS_FAISS:
+        idx = faiss.IndexFlatIP(DIM)
+        idx.add(vecs.astype(np.float32))
+        faiss.write_index(idx, VEC_FAISS)
+        print("✅ FAISS index saved")
+    elif _HAS_HNSW:
+        idx = hnswlib.Index(space="cosine", dim=DIM)
+        idx.init_index(len(vecs), ef_construction=512, M=500)
+
+        idx.add_items(vecs, np.arange(len(vecs)))
+        idx.save_index(VEC_HNSW)
+        print("✅ HNSW index saved")
+    else:
+        raise ImportError("Install faiss-cpu or hnswlib")
+
+    np.save(DOC_IDS_NPY, np.array(ids))
     return model
 
 # ──────────────────── BM25 local ───────────────────────────────────────────
-def get_cui_docs(textos, nlp):
-    cleaned = [str(t).lower() for t in textos]
+def compute_cui_docs(texts: List[str], nlp) -> List[str]:
+    """Return each document as space-separated CUIs."""
+    return [prompt_to_cuis(t.lower(), nlp) for t in texts]
 
-    # Aplica normalización a CUI para cada documento
-    cui_docs = [normalizar_prompt_a_cui(texto, nlp) for texto in cleaned]
-    return cui_docs
+def bm25_scores(
+    docs_as_cuis: List[str],
+    query: str,
+    nlp,
+    min_overlap: int = 1,
+) -> np.ndarray:
+    docs_tokenised = [d.split() for d in docs_as_cuis]
+    query_tokens   = prompt_to_cuis(query.lower(), nlp).split()
 
-def bm25_scores(cui_docs: List[str], query: str, nlp, min_overlap: int = 2):
-    # docs → lista-de-listas de tokens
-    docs_tok = [d.split() for d in cui_docs]
+    mask = [sum(tok in d for tok in query_tokens) >= min_overlap
+            for d in docs_tokenised]
+    docs_filtered = [d for d, keep in zip(docs_tokenised, mask) if keep]
+    if not docs_filtered:
+        docs_filtered, mask = docs_tokenised, [True] * len(docs_tokenised)
 
-    # query normalizada + tokens
-    q_tok = normalizar_prompt_a_cui(query.lower(), nlp).split()
+    bm25 = BM25Okapi(docs_filtered)
+    scores_part = bm25.get_scores(query_tokens)
 
-    # → descarta docs con < min_overlap CUIs de la query  ← NUEVO
-    mask = [sum(t in d for t in q_tok) >= min_overlap for d in docs_tok]
-    docs_filt = [d for d, keep in zip(docs_tok, mask) if keep]
-
-    if not docs_filt:                                 # fallback suave
-        docs_filt, mask = docs_tok, [True]*len(docs_tok)
-
-    bm25 = BM25Okapi(docs_filt)
-    scores = bm25.get_scores(q_tok)
-
-    # Rellenamos con 0 los descartados para mantener índice estable
-    full = np.zeros(len(cui_docs))
-    full[np.nonzero(mask)] = scores
+    full = np.zeros(len(docs_as_cuis))
+    ptr  = 0
+    for i, keep in enumerate(mask):
+        if keep:
+            full[i] = scores_part[ptr]
+            ptr += 1
     return full
 
-
-
 # ──────────────────── Vector search local ──────────────────────────────────
-def vec_scores(query: str, model: SentenceTransformer, top_n=180):
-    q = model.encode([query], normalize_embeddings=True).astype(np.float32)
-    ids = np.load(DOC_IDS_NPY)
+def dense_scores(query: str, model: SentenceTransformer, top_n=500) -> Dict[str, float]:
+     q_emb = model.encode([query], normalize_embeddings=True).astype(np.float32)
+     ids   = np.load(DOC_IDS_NPY)
 
-    if Path(VEC_FAISS).exists() and _HAS_FAISS:
-        idx = faiss.read_index(VEC_FAISS)
-        D, I = idx.search(q, top_n)
-        sims = 1 - D[0]
-        return {
-            str(ids[i]): float(sims[j])
-            for j, i in enumerate(I[0])
-            if i < len(ids)
-        }
+     if Path(VEC_FAISS).exists() and _HAS_FAISS:
+         idx = faiss.read_index(VEC_FAISS)
+         D, I = idx.search(q_emb, top_n)
+         sims = 1 - D[0]
+         return {str(ids[i]): float(sims[j])
+                 for j, i in enumerate(I[0]) if i < len(ids)}
+     
+     idx = hnswlib.Index(space="cosine", dim=DIM)
+     idx.load_index(VEC_HNSW)
+     idx.set_ef(512)
 
-    # HNSW fallback
-    idx = hnswlib.Index(space="cosine", dim=DIM)
-    idx.load_index(VEC_HNSW)
-    lab, dist = idx.knn_query(q, k=top_n)
-    sims = 1 - dist[0]
-    return {
-        str(ids[i]): float(sims[j])
-        for j, i in enumerate(lab[0])
-        if i < len(ids)
-    }
+     # Asegurarnos de no pedir más vecinos de los que existen:
+     max_k = len(ids)
+     k = min(top_n, max_k)
+
+     lbl, dist = idx.knn_query(q_emb, k=k)
+
+     sims = 1 - dist[0]
+     return {str(ids[i]): float(sims[j])
+             for j, i in enumerate(lbl[0]) if i < len(ids)}
 
 
-# ──────────────────── RRF fusion ───────────────────────────────────────────
-def rrf_fuse(bm25, vec, doc_ids, k=20, rrf_k=25):
-    scr = {}
-    # BM25 ranks
-    for rk, idx in enumerate(np.argsort(bm25)[::-1], 1):
-        scr[doc_ids[idx]] = scr.get(doc_ids[idx], 0) + 1/(rrf_k+rk)
-    # Vector ranks
-    for rk, doc in enumerate(sorted(vec, key=vec.get, reverse=True), 1):
-        scr[doc] = scr.get(doc, 0) + 1/(rrf_k+rk)
-    return sorted(scr.items(), key=lambda x: x[1], reverse=True)[:k]
+# =============================================================================
+#  Reciprocal Rank Fusion
+# =============================================================================
+def rrf(
+    bm25_vec: np.ndarray,
+    dense_dict: Dict[str, float],
+    doc_ids: List[str],
+    k: int = 20,
+    rrf_k: int = 5
+) -> List[Tuple[str, float]]:
+    scores: Dict[str, float] = {}
+    # BM25 contribution
+    nz = [i for i, s in enumerate(bm25_vec) if s > 0]
+    for rank, idx in enumerate(sorted(nz, key=lambda i: bm25_vec[i], reverse=True), 1):
+        did = doc_ids[idx]
+        scores[did] = scores.get(did, 0) + 1 / (rrf_k + rank)
+
+    # Dense contribution (only where BM25 > 0)
+    rank = 1
+    for did, _ in sorted(dense_dict.items(), key=lambda x: x[1], reverse=True):
+        try:
+            idx = doc_ids.index(did)
+        except ValueError:
+            continue
+        
+        scores[did] = scores.get(did, 0) + 1 / (rrf_k + rank)
+        rank += 1
+
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
 
 # ──────────────────── CLI ──────────────────────────────────────────────────
 def cli(nlp, linker):
@@ -437,9 +441,9 @@ def cli(nlp, linker):
 
     if not Path(CORPUS_CSV).exists():
         print("🔄 No corpus.csv. Ejecutando ingesta rápida...")
-        txt, ids = pre_ingest("synthea_data", "pubMed_data/train.csv")
+        txt, ids = pre_ingest("synthea/csv", "pubmed_rct/train.csv")
         print("ingestado")
-        cui_docs = get_cui_docs(txt, nlp)
+        cui_docs = compute_cui_docs(txt, nlp)
         print("cuidado")
         
         np.save(DOC_CUIS_NPY, np.array(cui_docs))
@@ -456,19 +460,23 @@ def cli(nlp, linker):
     ct_txt, ct_ids = ingest_trials(nlp, linker,
                   "35-year-old male with lung cancer and ibuprofen 3 times per week",
                   10000)
-    ct_cuis = get_cui_docs(ct_txt, nlp)
+    print(f"✔️  ClinicalTrials.gov fragments: {len(ct_txt)}")
+    ct_cuis = compute_cui_docs(ct_txt, nlp)
     build_vector_index(ct_txt + txt, ct_ids + ids)
-
+     
     model = SentenceTransformer(MODEL_NAME)
     print("modelado")
-    bm = bm25_scores(list(ct_cuis) + list(cui_docs), args.prompt, nlp)
+    bm = bm25_scores(list(ct_cuis) + list(cui_docs), args.prompt, nlp, min_overlap=2)
     print("BMeado")
-    vec   = vec_scores(args.prompt, model)
+    vec = dense_scores(prompt_to_cuis(args.prompt, nlp), model)
     print("scoreado")
-    res   = rrf_fuse(bm, vec, ct_ids + ids, k=args.k)
+    bm_norm = (bm - np.min(bm)) / (np.ptp(bm) + 1e-6)
+    vec_norm = {k: (v - min(vec.values())) / (max(vec.values()) - min(vec.values()) + 1e-6)
+                for k, v in vec.items()}
+    res = rrf(bm_norm, vec_norm, ct_ids + ids, k=args.k, rrf_k=5)
     print("rrfuseado")
     text_lookup = {**dict(zip(ids, txt)), **dict(zip(ct_ids, ct_txt))}
-
+    
     print("\n📄 Top resultados:")
     snippets = []
     for did, sc in res:
@@ -476,11 +484,11 @@ def cli(nlp, linker):
         snippets.append(snippet)
         print(f"{did:15}  score={sc:.3f}  → {snippet}...")
 
-    return [r + (s,) for r, s in zip(res, snippets)]
+    return snippets
 
 # ──────────────────── Auto-ejecución ───────────────────────────────────────
-if __name__ == "__main__":
-    nlp, linker = crear_pipeline_umls()
+if __name__ != "__main__":
+    nlp, linker = load_umls_pipeline()
     if len(sys.argv) == 1:
         sys.argv.extend(["search", "35-year-old male with lung cancer and ibuprofen 3 times per week"])
     cli(nlp, linker)
