@@ -1,42 +1,57 @@
-from utils import *
 from transformers import pipeline
+import torch
 
-def get_documents_by_class(documents, possible_classes=None):
+def get_documents_by_class(
+    documents: list[str],
+    possible_classes: list[str] | None = None,
+    threshold: float = 0.5,                     # ← nuevo
+    hypothesis_template: str = "This text is about {}."
+) -> dict[str, list[str]]:
     """
-    Classify a list of documents into one of the candidate labels using zero-shot learning.
-    Returns a dict: Keys are class names, values are lists of document texts assigned to that class.
-    The model used is facebook/bart-large-mnli by META.
+    Zero-shot classify documents into candidate classes (english prompts).
+    Filters out low-confidence predictions with a tunable threshold.
     """
     if possible_classes is None:
-        possible_classes = ["trial", "guidelines", "paper"]
+        possible_classes = ["clinical trial", "practice guideline", "research article"]
 
-    classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-    results = [classifier(doc, possible_classes) for doc in documents]
+    # 1) use longer, less-ambiguous labels
+    classifier = pipeline(
+        "zero-shot-classification",
+        model="facebook/bart-large-mnli",
+        device=0 if torch.cuda.is_available() else -1,
+    )
 
     docs_by_class = {cls: [] for cls in possible_classes}
-    for result in results:
-        top_class = result['labels'][0]
-        docs_by_class[top_class].append(result['sequence'])
+    for doc in documents:
+        res = classifier(
+            doc,
+            candidate_labels=possible_classes,
+            hypothesis_template=hypothesis_template,
+            multi_label=False,
+        )
+        top_label, top_score = res["labels"][0], res["scores"][0]
+        if top_score >= threshold:                  # 2) aplica umbral
+            docs_by_class[top_label].append(doc)
     return docs_by_class
 
 # Example usage: classify a list of sample documents into predefined categories using zero-shot classification.
 if __name__ == "__main__":
     # 10 example documents (repeating the base list for demonstration)
     base_documents = [
-        "This clinical trial investigates the effects of a new drug.",
-        "The latest guidelines for COVID-19 prevention have been published.",
-        "A recent paper discusses advances in machine learning.",
-        "Guidelines for hypertension management were updated.",
-        "This paper presents a novel approach to data analysis.",
-        "A randomized trial was conducted to test the vaccine.",
-        "Clinical guidelines recommend regular exercise for heart health.",
-        "The trial results show significant improvement in patients.",
-        "This paper reviews the literature on deep learning.",
-        "Guidelines for diabetes care have changed recently."
+        "A new smartphone model was released with advanced camera features.",
+        "Researchers discovered a potential link between sleep and memory retention.",
+        "The city council approved new regulations for electric scooters.",
+        "A clinical trial is underway to test a novel cancer therapy.",
+        "Guidelines for sustainable urban development were updated this year.",
+        "A recent article explores the impact of social media on mental health.",
+        "Practice guidelines for asthma management have been revised.",
+        "The study analyzes voting patterns in recent elections.",
+        "A randomized controlled trial evaluated a new diet for weight loss.",
+        "Experts published recommendations for cybersecurity best practices."
     ]
     sample_documents = base_documents
 
-    classes = ["trial", "guidelines", "paper"]
+    classes = None
     result = get_documents_by_class(sample_documents, classes)
     for cls, docs in result.items():
         print(f"\nClass: {cls}")
