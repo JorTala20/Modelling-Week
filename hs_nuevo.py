@@ -49,6 +49,7 @@ CORPUS_CSV    = "corpus.csv"
 
 DIM           = 384
 MODEL_NAME    = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_PATH    = "transformer_modelo"
 
 # =============================================================================
 #  UMLS PIPELINE
@@ -227,40 +228,64 @@ def ct_query(term: str, size: int) -> List[str]:
     except Exception:
         return []
 
+def synonim_cui(cui: str, linker) -> List[str]:
+    """
+    Devuelve una lista de sinónimos (incluyendo el nombre canónico)
+    para un CUI usando linker.kb.
+    """
+    entity = linker.kb.cui_to_entity.get(cui)
+    if not entity:
+        return [cui]  # fallback si no se encuentra el CUI
 
-def ingest_clinical_trials(
-    linker,
-    cuis: List[str],
-    limit: int = 200,
-) -> List[Tuple[str, List[str]]]:
+    # Combina nombre canónico + alias únicos
+    sinonimos = set(entity.aliases)
+    sinonimos.add(entity.canonical_name)
+    return list(sinonimos)
+
+
+def ingest_clinical_trials(linker, terms: List[str], limit: int = 200):
     """
-    Step-down search:
-    1) use synonyms of the first (most important) CUI to collect candidates;
-    2) keep only titles containing synonyms of *all* remaining CUIs
-       (logical AND); if none -> return primary hits as fallback.
+    terms = lista de descripciones en lenguaje natural, ej. ['lung cancer','ibuprofen']
+    Implementa búsqueda jerárquica: primero term[0]; luego filtra con term[1:], etc.
     """
-    if not cuis:
+    def consulta(cui, linker):
+        qs = sorted(synonim_cui(cui, linker))
+        numero = int(len(qs)/3)+1
+        result = []
+        for q in qs[:numero]:
+            print(q)
+            url = f"https://clinicaltrials.gov/api/v2/studies?query.term={quote(q)}&pageSize={limit}"
+            try:
+                js = requests.get(url, timeout=30).json()
+                result += [
+                    e.get("protocolSection", {})
+                     .get("identificationModule", {})
+                     .get("briefTitle", "").strip()
+                    for e in js.get("studies", [])
+                ]
+            except Exception:
+                return result
+        return result
+
+    if not terms:
         return []
 
-    primary_syn = cui_synonyms(cuis[0], linker)[:3]
-    rest_syn    = [cui_synonyms(c, linker)[:2] for c in cuis[1:]]
+    # 1) Primera capa: term principal
+    primarios = consulta(terms[0], linker)
 
-    # 1️⃣ primary pool
-    primary: List[str] = []
-    per_page = min(limit, 50)
-    for s in primary_syn:
-        primary += ct_query(s, per_page)
-    primary = list(dict.fromkeys(primary))          # deduplicate
+    # 2) Filtra por los términos restantes
+    filtrados = []
 
-    # 2️⃣ AND ANY-filter with remaining CUIs
-    rest_flat = [s.lower() for syns in rest_syn for s in syns]
-    filtered  = [t for t in primary if any(r in t.lower() for r in rest_flat)]
-    final     = filtered if filtered else primary
+    resto = list(
+        map(lambda x: x.lower(),
+            chain.from_iterable(synonim_cui(t, linker)[:2] for t in terms[1:]))
+    )
+    for t in primarios:
+        if any(r in t for r in resto):
+            filtrados.append(t)
 
-    label = " & ".join(cui_synonyms(cuis[0], linker)[:1] +
-                       [cui_synonyms(c, linker)[0] for c in cuis[1:]])
-    return [(label, final[:limit])]
-
+    finales = filtrados if filtrados else primarios
+    return [(f"{' & '.join(terms)}", finales[:limit])]
 # =============================================================================
 #  Priority table (semantic type ➜ clinical importance)
 # =============================================================================
@@ -308,8 +333,7 @@ def ingest_trials(
 # =============================================================================
 #  Vector index helpers
 # =============================================================================
-def build_vector_index(texts: List[str], ids: List[str]) -> SentenceTransformer:
-    model = SentenceTransformer(MODEL_NAME)
+def build_vector_index(texts: List[str], model) -> SentenceTransformer:
     vecs  = model.encode(texts, normalize_embeddings=True)
 
     if _HAS_FAISS:
@@ -326,7 +350,6 @@ def build_vector_index(texts: List[str], ids: List[str]) -> SentenceTransformer:
     else:
         raise ImportError("Install faiss-cpu or hnswlib")
 
-    np.save(DOC_IDS_NPY, np.array(ids))
     return model
 
 # =============================================================================
@@ -435,15 +458,20 @@ def cli(nlp, linker):
     # ─── SEARCH FLOW ───────────────────────────────────────────────────────
     if not Path(CORPUS_CSV).exists():
         print("🔄 No corpus.csv. Executing default ingest (synthea/csv + pubmed_rct/train.csv)...")
-        default_synthea = "synthea/csv"
-        default_pubmed = "pubmed_rct/train.csv"
-        texts, ids = pre_ingest(default_synthea, default_pubmed)
-        cui_docs = compute_cui_docs(texts, nlp)
+        txt, ids = pre_ingest("synthea_data", "pubMed_data/train.csv")
+        print("ingestado")
+        cui_docs = compute_cui_docs(txt, nlp)
         np.save(DOC_CUIS_NPY, np.array(cui_docs))
         np.save(DOC_IDS_NPY, np.array(ids))
-        pd.DataFrame({"id": ids, "text": texts}).to_csv(CORPUS_CSV, index=False)
-        build_vector_index(texts, ids)
-        
+        model = SentenceTransformer(MODEL_NAME)
+        build_vector_index(txt, model)
+        model.save(MODEL_PATH)
+        print("model guardado")
+
+        pd.DataFrame({"id": ids, "text": txt}).to_csv(CORPUS_CSV, index=False)
+        build_vector_index(txt, ids)
+
+
     # Load local corpus
     print("🔄 Corpus encontrado")
     df        = pd.read_csv(CORPUS_CSV).fillna("")
@@ -451,33 +479,38 @@ def cli(nlp, linker):
     base_ids  = df["id"].tolist()
     base_cuis = np.load(DOC_CUIS_NPY)
 
+    model = SentenceTransformer(MODEL_PATH)
     # Ingest on-the-fly ClinicalTrials for this query
     ct_txt, ct_ids = ingest_trials(nlp, linker, args.prompt, args.trial_limit)
     print(f"✔️  ClinicalTrials.gov fragments: {len(ct_txt)}")
     ct_cuis        = compute_cui_docs(ct_txt, nlp)
-
+    print("Computados cuis")
     # Combine & rebuild vector index (quick)
-    build_vector_index(ct_txt + base_txt, ct_ids + base_ids)
-    model = SentenceTransformer(MODEL_NAME)
-
+    build_vector_index(ct_txt, model)
+    print("vectores")
     # BM25 + dense + RRF
     bm = bm25_scores(ct_cuis + list(base_cuis), args.prompt, nlp)
+    print("Scores")
     dense = dense_scores(args.prompt, model)
     fused = rrf(bm, dense, ct_ids + base_ids, k=args.k)
+    print("fused")
 
     # Pretty print
     lookup = {**dict(zip(base_ids, base_txt)), **dict(zip(ct_ids, ct_txt))}
     print("\nTop results")
+    snippets = []
     for did, score in fused:
         snippet = lookup[did][:120].replace("\n", " ")
+        snippets.append(snippet)
         print(f"{did:20}  RRF={score:.3f}  -> {snippet}…")
 
+    return snippets
 
 # =============================================================================
 #  ENTRY-POINT
 # =============================================================================
-#nlp, linker = load_umls_pipeline()
-if len(sys.argv) == 1:  # quick demo
-    sys.argv.extend(["search",
-                     "35-year-old male with lung cancer and ibuprofen 3 times per week"])
-cli(nlp, linker)
+def get_documents_hybrid_search(query) :
+    nlp, linker = load_umls_pipeline()
+    if len(sys.argv) == 1:  # quick demo
+        sys.argv.extend(["search", query])
+    return cli(nlp, linker)
