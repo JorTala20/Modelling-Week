@@ -1,4 +1,7 @@
 from utils import *
+import uvicorn
+import asyncio
+from server import app
 
 async def iniciar_servidor():
     """Inicia el servidor FastAPI."""
