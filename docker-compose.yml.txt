@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: ./server  # Path to the server directory
+    ports:
+      - "8000:8000"
+
+  client:
+    build:
+      context: ./client  # Path to the client directory
+    depends_on:
+      - server  # Ensure the server is up before starting the client
