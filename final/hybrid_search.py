@@ -48,7 +48,7 @@ VEC_HNSW      = "hnsw_index.bin"
 CORPUS_CSV    = "corpus.csv"
 
 DIM           = 384
-MODEL_NAME    = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_NAME    = "sentence-transformers/biomed-roberta-base-msmarco"
 MODEL_PATH    = "transformer_modelo"
 
 # =============================================================================
