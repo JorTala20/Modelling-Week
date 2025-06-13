@@ -437,6 +437,52 @@ def rrf(
 
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
 
+
+# =============================================================================
+#  Reciprocal Rank Fusion INTERSECTION
+# =============================================================================
+def rrf_strict_intersection(
+    bm25_vec: np.ndarray,
+    dense_dict: Dict[str, float],
+    doc_ids: List[str],
+    k: int = 20,
+    rrf_k: int = 5
+) -> List[Tuple[str, float]]:
+    """
+    Fonde i risultati BM25 e Dense solo per i documenti che appaiono in entrambi.
+    Applica Reciprocal Rank Fusion (RRF) per combinarli.
+    """
+    scores: Dict[str, float] = {}
+
+    # Mappa degli ID e posizioni da BM25
+    bm25_ranking = [
+        (i, bm25_vec[i]) for i in np.argsort(-bm25_vec) if bm25_vec[i] > 0
+    ]
+    bm25_doc_rank = {
+        doc_ids[i]: rank + 1 for rank, (i, _) in enumerate(bm25_ranking)
+    }
+
+    # Mappa degli ID e posizioni da Dense
+    dense_doc_rank = {
+        did: rank + 1 for rank, (did, _) in enumerate(
+            sorted(dense_dict.items(), key=lambda x: x[1], reverse=True))
+    }
+
+    # Intersezione dei documenti presenti in entrambi
+    shared_docs = set(bm25_doc_rank) & set(dense_doc_rank)
+
+    for did in shared_docs:
+        bm25_rank = bm25_doc_rank[did]
+        dense_rank = dense_doc_rank[did]
+
+        # Formula RRF classica
+        score = 1 / (rrf_k + bm25_rank) + 1 / (rrf_k + dense_rank)
+        scores[did] = score
+
+    # Ordina per score e restituisci top-k
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
+
+
 # =============================================================================
 #  CLI
 # =============================================================================
