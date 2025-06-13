@@ -5,5 +5,5 @@ from transformers import pipeline
 import time
 import requests
 
-HF_TOKEN = "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"  # Hugging Face token
+HF_TOKEN = "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"  # Hugging Face token
 MODEL_ID = "mistralai/Mixtral-8x7B-Instruct-v0.1" # zero-shot model
