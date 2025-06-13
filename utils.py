@@ -6,4 +6,4 @@ import time
 import requests
 
 HF_TOKEN = "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"  # Hugging Face token
-MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"            # zero-shot model
+MODEL_ID = "mistralai/Mixtral-8x7B-Instruct-v0.1" # zero-shot model
