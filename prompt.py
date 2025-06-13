@@ -1,4 +1,4 @@
-def generate_prompt(docs_by_class=None, patient_info=None):
+def generate_prompt(docs_by_class=None, patient_info : str = None):
     """
     Create a detailed prompt for a Retrieval-Augmented Generation (RAG) system, including sources,
     patient information, and clinical history, with each input section labeled by its class.
@@ -38,8 +38,7 @@ def generate_prompt(docs_by_class=None, patient_info=None):
     # Format patient information if provided
     patient_section = ""
     if patient_info:
-        formatted_patient = _format_dict(patient_info)
-        patient_section = f"\n\nPatient information (class: dict):\n{formatted_patient}"
+        patient_section = f"\n\nPatient information (class: str):\n{patient_info}"
 
     task = (
         "\n\nTASK:\n"
