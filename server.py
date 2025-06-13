@@ -1,67 +1,28 @@
-import logging
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
-import websockets
-import asyncio
-from hs_nuevo import *
-from utils import *
+import json 
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect 
+import uvicorn
+# Faltan los imports para que funcionen las funciones en si
 
-app = FastAPI()
+# Create the FastAPI app instance 
+app = FastAPI() 
 
-user_sessions = {}
-
-
-@app.get("/health")
-async def health_check():
-    logging.info("Health check called")
-    return {"status": "ok"}
-
-
-def init_session(user_id):
-    """
-    Creates a session for a new user or returns the session from an existing user
-    """
-    if user_id not in user_sessions:
-        user_sessions[user_id] = {
-            "conversation": []
-        }
-        logging.info(f"New session created for user_id={user_id}")
-    return user_sessions[user_id]
-
-
-@app.websocket("/api/v1/chat")
-async def websocket_endpoint(websocket):
+# WebSocket endpoint 
+@app.websocket("/ws") 
+async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-
-    user_id = (await websocket.recv()).strip()
-    session = init_session(user_id)
-    conversation = session["conversation"]
-
-    try:
+    try: 
         while True:
-            user_prompt = (await websocket.recv()).strip()
-            if not user_prompt:
-                continue
-
-            conversation.append({"role": "user", "content": user_prompt})
-
-            documents = get_documents_hybrid_search(user_prompt)
-            print(user_prompt)
+            query = await websocket.receive_text()
+            nlp, linker = load_umls_pipeline()
+            if len(sys.argv) == 1:
+                sys.argv.extend(["search",query])
+            cli(nlp, linker)
             classified_docs = get_documents_by_class(documents)
-            print(user_prompt)
-            new_prompt = generate_prompt(classified_docs, user_prompt)
-            print(user_prompt)
-            print("--------------------------------------------------------")
-            print(new_prompt)
-            response = generate_text(new_prompt, MODEL_ID, HF_TOKEN)
-            print(response)
+            prompt = generate_prompt(classified_docs, user_prompt)
+            response = generate_text(prompt, MODEL_ID, HF_TOKEN)
+            await websocket.send_text(response)
+    except WebSocketDisconnect: 
+        print("Client disconnected")
 
-            conversation.append({"role": "assistant", "content": response})
-            session["conversation"] = conversation
-            await websocket.send(response)
 
-    except WebSocketDisconnect:
-        user_sessions.pop(user_id, None)
-        logging.info(f"Client {user_id} disconnected and session terminated.")
-
-    except Exception as e:
-        logging.error(f"WebSocket error (user {user_id}): {e}")
+if __name__ == "__main__": uvicorn.run(app, host="0.0.0.0", port=8000)
