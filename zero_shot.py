@@ -1,4 +1,5 @@
 from utils import *
+from transformers import pipeline
 
 def get_documents_by_class(documents, possible_classes=None):
     """
