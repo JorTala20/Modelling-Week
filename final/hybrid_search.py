@@ -409,79 +409,76 @@ def dense_scores(query: str, model: SentenceTransformer, top_n=150) -> Dict[str,
 # =============================================================================
 #  Reciprocal Rank Fusion
 # =============================================================================
+from collections import defaultdict
+import numpy as np
+from typing import Dict, List, Tuple
+
 def rrf(
     bm25_vec: np.ndarray,
     dense_dict: Dict[str, float],
     doc_ids: List[str],
     k: int = 20,
-    rrf_k: int = 5,
-) -> List[Tuple[str, float]]:
-    scores: Dict[str, float] = {}
-    # BM25 contribution
-    nz = [i for i, s in enumerate(bm25_vec) if s > 0]
-    for rank, idx in enumerate(sorted(nz, key=lambda i: bm25_vec[i], reverse=True), 1):
-        did = doc_ids[idx]
-        scores[did] = scores.get(did, 0) + 1 / (rrf_k + rank)
-
-    # Dense contribution (only where BM25 > 0)
-    rank = 1
-    for did, _ in sorted(dense_dict.items(), key=lambda x: x[1], reverse=True):
-        try:
-            idx = doc_ids.index(did)
-        except ValueError:
-            continue
-        if bm25_vec[idx] <= 0:
-            continue
-        scores[did] = scores.get(did, 0) + 1 / (rrf_k + rank)
-        rank += 1
-
-    return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
-
-
-# =============================================================================
-#  Reciprocal Rank Fusion INTERSECTION
-# =============================================================================
-def rrf_strict_intersection(
-    bm25_vec: np.ndarray,
-    dense_dict: Dict[str, float],
-    doc_ids: List[str],
-    k: int = 20,
-    rrf_k: int = 5
+    rrf_k: int = 60,
+    allow_dense_only: int = 0,
+    intersection_bonus: float = 0.1,
 ) -> List[Tuple[str, float]]:
     """
-    Fonde i risultati BM25 e Dense solo per i documenti che appaiono in entrambi.
-    Applica Reciprocal Rank Fusion (RRF) per combinarli.
+    RRF mejorado con refuerzo de intersección:
+    · BM25 aporta 1/(rrf_k + rank_bm25).
+    · Dense aporta 1/(rrf_k + rank_dense) si bm25_vec>0 o está dentro de los `allow_dense_only` primeros.
+    · Si un documento aparece en ambos rankings (intersección), se añade un bonus fijo al score final.
+    Parámetros:
+      bm25_vec: array de scores BM25 normalizados o crudos (solo >0 importa el orden).
+      dense_dict: mapping doc_id -> score denso.
+      doc_ids: lista de IDs en orden coincidente con bm25_vec.
+      k: número de resultados a devolver.
+      rrf_k: constante RRF (usualmente alto, e.g. 60).
+      allow_dense_only: cuántos “dense-only” permitir (0 = solo docs con BM25>0).
+      intersection_bonus: valor fijo a sumar si el doc está en ambos rankings.
+    Retorna:
+      Lista de tuplas (doc_id, score) ordenadas por score descendente, top-k.
     """
-    scores: Dict[str, float] = {}
+    scores: Dict[str, float] = defaultdict(float)
 
-    # Mappa degli ID e posizioni da BM25
-    bm25_ranking = [
-        (i, bm25_vec[i]) for i in np.argsort(-bm25_vec) if bm25_vec[i] > 0
-    ]
-    bm25_doc_rank = {
-        doc_ids[i]: rank + 1 for rank, (i, _) in enumerate(bm25_ranking)
-    }
+    # 1) Preparar ranking BM25: índices con score>0 y mapeo doc->rank
+    nz_idx = np.flatnonzero(bm25_vec)  # índices con BM25>0
+    if nz_idx.size > 0:
+        # orden descendente de BM25
+        sorted_bm25_idx = nz_idx[np.argsort(-bm25_vec[nz_idx])]
+    else:
+        sorted_bm25_idx = np.array([], dtype=int)
+    bm25_rank = {doc_ids[i]: rank + 1 for rank, i in enumerate(sorted_bm25_idx)}
 
-    # Mappa degli ID e posizioni da Dense
-    dense_doc_rank = {
-        did: rank + 1 for rank, (did, _) in enumerate(
-            sorted(dense_dict.items(), key=lambda x: x[1], reverse=True))
-    }
+    # 2) Preparar ranking Dense: lista ordenada y mapeo doc->rank
+    dense_sorted = sorted(dense_dict.items(), key=lambda x: -x[1])
+    dense_rank = {did: rank + 1 for rank, (did, _) in enumerate(dense_sorted)}
 
-    # Intersezione dei documenti presenti in entrambi
-    shared_docs = set(bm25_doc_rank) & set(dense_doc_rank)
+    # 3) Conjunto de BM25 y contadores
+    bm25_seen = set(bm25_rank)
+    added_dense_only = 0
 
-    for did in shared_docs:
-        bm25_rank = bm25_doc_rank[did]
-        dense_rank = dense_doc_rank[did]
+    # 4) Recorrer BM25 primero (asegura inclusión de todos con BM25>0)
+    for did, rank in bm25_rank.items():
+        scores[did] += 1.0 / (rrf_k + rank)
 
-        # Formula RRF classica
-        score = 1 / (rrf_k + bm25_rank) + 1 / (rrf_k + dense_rank)
-        scores[did] = score
+    # 5) Recorrer Dense con filtro y bonus de intersección
+    #    Rompemos si ya superamos margen para top-k (optimización)
+    for rank, (did, _) in enumerate(dense_sorted, start=1):
+        in_bm25 = did in bm25_seen
+        if not in_bm25:
+            if added_dense_only >= allow_dense_only:
+                continue
+            added_dense_only += 1
+        scores[did] += 1.0 / (rrf_k + rank)
+        # si en intersección, aplicamos bonus fijo
+        if in_bm25:
+            scores[did] += intersection_bonus
+        # Si ya tenemos suficientes candidatos acumulados, podemos romper
+        if len(scores) >= k * 3:
+            break
 
-    # Ordina per score e restituisci top-k
-    return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:k]
-
+    # 6) Ordenar y devolver top-k
+    return sorted(scores.items(), key=lambda x: -x[1])[:k]
 
 # =============================================================================
 #  CLI
