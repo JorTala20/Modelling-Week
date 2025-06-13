@@ -1,4 +1,4 @@
-def generate_prompt(docs_by_class=None, patient_info : str = None):
+def generate_prompt(docs_by_class=None, patient_info=None):
     """
     Create a detailed prompt for a Retrieval-Augmented Generation (RAG) system, including sources,
     patient information, and clinical history, with each input section labeled by its class.
@@ -11,34 +11,44 @@ def generate_prompt(docs_by_class=None, patient_info : str = None):
     def _format_dict(info_dict):
         # Format a dictionary as key-value pairs, one per line.
         return "\n".join([f"{k}: {v}" for k, v in info_dict.items()])
-
+        
     intro = (
-        "You will receive several inputs divided by section, each indicating its class.\n"
-        "- Sources (class: list[str]): relevant papers, guidelines, and clinical trials.\n"
-        "- Patient information (class: dict): current demographic and clinical data.\n\n"
-        "Use all sections to provide precise and up-to-date recommendations on the most suitable treatment. "
-        "Cite relevant sources in your response.\n"
-    )
-
-    # Format sources by class if provided as a dictionary
-    if docs_by_class:
-        guidelines = "\n".join([f"- {doc.strip()}" for doc in docs_by_class.get('guidelines', []) if doc.strip()])
-        papers = "\n".join([f"- {doc.strip()}" for doc in docs_by_class.get('papers', []) if doc.strip()])
-        trials = "\n".join([f"- {doc.strip()}" for doc in docs_by_class.get('trials', []) if doc.strip()])
-        sources_section = (
-            f"Guidelines (class: list[str]):\n{guidelines}\n\n"
-            f"Papers (class: list[str]):\n{papers}\n\n"
-            f"Clinical Trials (class: list[str]):\n{trials}"
+            "You will receive several inputs divided by section, each indicating its class.\n"
+            "- Sources (class: list[str]): relevant papers, guidelines, and clinical trials.\n"
+            "- Patient information (class: dict): current demographic and clinical data.\n\n"
+            "Use all sections to provide precise and up-to-date recommendations on the most suitable treatment. "
+            "Cite relevant sources in your response.\n"
         )
+
+        # Format sources by class if provided as a dictionary
+    sources_section = ""
+    if docs_by_class:
+        sections = []
+        if docs_by_class.get('guidelines'):
+            guidelines = "\n".join([f"- {doc.strip()}" for doc in docs_by_class.get('guidelines', []) if doc.strip()])
+            if guidelines:
+                sections.append(f"Guidelines (class: list[str]):\n{guidelines}")
+        if docs_by_class.get('papers'):
+            papers = "\n".join([f"- {doc.strip()}" for doc in docs_by_class.get('papers', []) if doc.strip()])
+            if papers:
+                sections.append(f"Papers (class: list[str]):\n{papers}")
+        if docs_by_class.get('trials'):
+            trials = "\n".join([f"- {doc.strip()}" for doc in docs_by_class.get('trials', []) if doc.strip()])
+            if trials:
+                sections.append(f"Clinical Trials (class: list[str]):\n{trials}")
+        if sections:
+            sources_section = "\n\n".join(sections)
     else:
         # If docs_by_class is not a dictionary, treat it as a flat list of sources
         sources = "\n".join([f"- {doc.strip()}" for doc in docs_by_class if doc.strip()])
-        sources_section = f"Sources (class: list[str]):\n{sources}"
+        if sources:
+            sources_section = f"Sources (class: list[str]):\n{sources}"
 
     # Format patient information if provided
     patient_section = ""
     if patient_info:
-        patient_section = f"\n\nPatient information (class: str):\n{patient_info}"
+        formatted_patient = _format_dict(patient_info)
+        patient_section = f"\n\nPatient information (class: dict):\n{formatted_patient}"
 
     task = (
         "\n\nTASK:\n"
