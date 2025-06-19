@@ -39,9 +39,9 @@ def generate_text(prompt: str, model_id: str, hf_token: str, max_new_tokens: int
         raise Exception(f"API Error {response.status_code}: {response.text}")
 
 
-# Example usage (comment out or remove before importing in server.py)
+# Example usage 
 if __name__ == "__main__":
-    HF_TOKEN = "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"  # Replace with your Hugging Face token
+    HF_TOKEN = "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"  # Hugging Face token
     MODEL_ID = "mistralai/Mixtral-8x7B-Instruct-v0.1"
 
             # Example model
