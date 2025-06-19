@@ -14,7 +14,6 @@ def get_documents_by_class(
     if possible_classes is None:
         possible_classes = ["clinical trial", "practice guideline", "research article"]
 
-    # 1) use longer, less-ambiguous labels
     classifier = pipeline(
         "zero-shot-classification",
         model="facebook/bart-large-mnli",
@@ -30,13 +29,13 @@ def get_documents_by_class(
             multi_label=False,
         )
         top_label, top_score = res["labels"][0], res["scores"][0]
-        if top_score >= threshold:                  # 2) aplica umbral
+        if top_score >= threshold:                  # Treshold
             docs_by_class[top_label].append(doc)
     return docs_by_class
 
-# Example usage: classify a list of sample documents into predefined categories using zero-shot classification.
+# Example usage
 if __name__ == "__main__":
-    # 10 example documents (repeating the base list for demonstration)
+    # 10 example documents
     base_documents = [
         "A new smartphone model was released with advanced camera features.",
         "Researchers discovered a potential link between sleep and memory retention.",
