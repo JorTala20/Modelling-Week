@@ -1,6 +1,6 @@
 def generate_prompt(docs_by_class=None, patient_info=None):
     """
-    Create a detailed prompt for a Retrieval-Augmented Generation (RAG) system, including sources,
+    Create a detailed prompt for the RAG (Generative) part, including sources,
     patient information, and clinical history, with each input section labeled by its class.
 
     :param docs_by_class: Optional dictionary with keys 'guidelines', 'papers', 'trials', each mapping to a list of strings.
