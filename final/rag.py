@@ -8,7 +8,7 @@ def generate_text(prompt: str, model_id: str, hf_token: str, max_new_tokens: int
 
     Args:
         prompt (str): The input prompt to send to the model.
-        model_id (str): The Hugging Face model identifier (e.g., "HuggingFaceH4/zephyr-7b-beta").
+        model_id (str): The Hugging Face model identifier.
         hf_token (str): Hugging Face access token with read permissions.
         max_new_tokens (int): Maximum number of tokens to generate in the response.
 
