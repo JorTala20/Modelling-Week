@@ -28,6 +28,7 @@ from __future__ import annotations
 ###############################################################################
 # Standard library
 ###############################################################################
+
 import argparse, sys
 from pathlib import Path
 from typing import List, Dict, Tuple
@@ -40,6 +41,7 @@ from urllib.parse import quote
 ###############################################################################
 # Third‑party
 ###############################################################################
+
 import numpy as np
 import pandas as pd
 import requests
@@ -63,6 +65,7 @@ except ImportError:
 ###############################################################################
 # Hyper‑parameters and file paths (all relative to CWD)
 ###############################################################################
+
 DOC_IDS_NPY   = "doc_ids.npy"         # numpy array[str] – one per fragment
 DOC_CUIS_NPY  = "doc_cuis.npy"        # numpy array[str] – tokenised by CUIs
 VEC_FAISS     = "vectors.index"       # binary FAISS index (flat IP)
@@ -76,6 +79,7 @@ MODEL_PATH    = "transformer_model"    # on‑disk SBERT cache
 ###############################################################################
 # UMLS / spaCy helpers
 ###############################################################################
+
 def load_umls_pipeline():
     """
     Build and return a *spaCy* pipeline augmented with the **scispaCy UMLS linker**.
@@ -300,7 +304,6 @@ def pre_ingest(synthea_path: str = "synthea/csv", pubmed_path: str = "pubmed_rct
     ids += pubmed_ids
 
     return texts, ids
-
 
 ###############################################################################
 #  ClinicalTrials.gov  (hierarchical search)
