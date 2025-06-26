@@ -729,6 +729,7 @@ def cli(nlp, linker):
         pd.DataFrame({"id": ids, "text": txt}).to_csv(CORPUS_CSV, index=False)
 
     # load persistent artefacts
+    print("--> Corpus encontrado")
     df   = pd.read_csv(CORPUS_CSV).fillna("")
     txts = df["text"].astype(str).tolist()
     ids  = df["id"].tolist()
