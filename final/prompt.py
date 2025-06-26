@@ -3,9 +3,12 @@ def generate_prompt(docs_by_class=None, patient_info=None):
     Create a detailed prompt for a Retrieval-Augmented Generation (RAG) system, including sources,
     patient information, and clinical history, with each input section labeled by its class.
 
-    :param docs_by_class: Optional dictionary with keys 'guidelines', 'papers', 'trials', each mapping to a list of strings.
-    :param patient_info: Optional dictionary containing patient demographic and clinical data.
-    :return: A formatted prompt string.
+    Args:
+        docs_by_class: Optional dictionary with keys 'guidelines', 'papers', 'trials', each mapping to a list of strings (documents).
+        patient_info: Optional dictionary containing patient demographic and clinical data.
+        
+    Returns:
+        Formatted prompt string.
     """
 
     def _format_dict(info_dict):
@@ -20,7 +23,7 @@ def generate_prompt(docs_by_class=None, patient_info=None):
             "Cite relevant sources in your response.\n"
         )
 
-        # Format sources by class if provided as a dictionary
+    # Format sources by class if provided as a dictionary
     sources_section = ""
     if docs_by_class:
         sections = []
