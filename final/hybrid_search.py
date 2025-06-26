@@ -1,16 +1,15 @@
 # =============================================================================
-#  HYBRID SEARCH PIPELINE (local – no Elasticsearch)
+#  HYBRID SEARCH
 # =============================================================================
-#  • Unified ingestion:   Synthea (+patients/+conditions)
+#  • Ingestion:           Synthea (+patients/+conditions)
 #                         PubMed-RCT  (Kaggle CSV)
 #                         ClinicalTrials.gov (REST v2)
-#  • Embeddings           sentence-transformers/all-MiniLM-L6-v2  (384-dim)
+#  • Embeddings           sentence-transformers
 #  • Vector index         FAISS (fallback HNSWlib)
 #  • Ranking              BM25  +  dense similarity  ➜  RRF fusion
 # =============================================================================
 from __future__ import annotations
 
-# ────────────────────────── Standard imports ────────────────────────────────
 import argparse, sys
 from pathlib import Path
 from typing import List, Dict, Tuple
@@ -24,7 +23,7 @@ from urllib.parse import quote
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 
-# FAISS / HNSW (vector back-ends) – soft-import
+# We use FAISS or HNSW as search engines
 try:
     import faiss;  _HAS_FAISS = True
 except ImportError:
@@ -34,13 +33,12 @@ try:
 except ImportError:
     _HAS_HNSW = False
 
-# ───────────────────────────── NLP – spaCy + scispaCy ───────────────────────
 import spacy, scispacy, scispacy.umls_linking
 from sklearn.exceptions import InconsistentVersionWarning
 import warnings
 warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
-# ───────────────────────────── Hyper-parameters / files ─────────────────────
+# ───────────────────────────── Hyper-parameters  ─────────────────────
 DOC_IDS_NPY   = "doc_ids.npy"
 DOC_CUIS_NPY  = "doc_cuis.npy"
 VEC_FAISS     = "vectors.index"
@@ -52,7 +50,7 @@ MODEL_NAME    = "sentence-transformers/biomed-roberta-base-msmarco"
 MODEL_PATH    = "transformer_modelo"
 
 # =============================================================================
-#  UMLS PIPELINE
+#  UMLS
 # =============================================================================
 def load_umls_pipeline():
     """Create spaCy pipeline + scispaCy UMLS linker."""
