@@ -1,0 +1,10 @@
+# Remove .txt extension of the file if needed
+FROM python:3.9-slim
+
+WORKDIR /app
+
+COPY . .
+
+RUN pip install websockets
+
+CMD ["python", "client.py"]
