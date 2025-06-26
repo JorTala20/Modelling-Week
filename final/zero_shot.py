@@ -4,12 +4,20 @@ import torch
 def get_documents_by_class(
     documents: list[str],
     possible_classes: list[str] | None = None,
-    threshold: float = 0.5,                     # ← nuevo
+    threshold: float = 0.5,
     hypothesis_template: str = "This text is about {}."
 ) -> dict[str, list[str]]:
     """
-    Zero-shot classify documents into candidate classes (english prompts).
-    Filters out low-confidence predictions with a tunable threshold.
+    Zero-shot classifies documents into candidate classes (english prompts).
+    Filters out low-confidence predictions with a threshold.
+    Args:
+        documents (List[str]): documents to classify
+        possible_classes (List[str]): possible classifications for the model
+        threshold (float)
+        hypotesis_template (str)
+
+    Returns:
+        dict[str, List[str]]: list of documents divided per class
     """
     if possible_classes is None:
         possible_classes = ["clinical trial", "practice guideline", "research article"]
@@ -29,7 +37,7 @@ def get_documents_by_class(
             multi_label=False,
         )
         top_label, top_score = res["labels"][0], res["scores"][0]
-        if top_score >= threshold:                  # Treshold
+        if top_score >= threshold:
             docs_by_class[top_label].append(doc)
     return docs_by_class
 
